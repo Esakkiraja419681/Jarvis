@@ -238,7 +238,7 @@ def main() -> int:
           ungated.repair_attempts == 0, f"attempts={ungated.repair_attempts}")
     check("ungated refusal is audited",
           any(e["action"] == "repair" and e["decision"] == "skipped"
-              for e in kernel.audit.tail(limit=60)))
+              for e in kernel.audit.tail(limit=500, category="overseer")))
 
     print("\n== task manager ==")
     tasks, strategy = kernel.task_manager.decompose("research the weather and write a script")
@@ -262,9 +262,6 @@ def main() -> int:
     check("daemon status available", "BackgroundDaemon" in kernel.daemon.status())
 
     print("\n== control bridge ==")
-    _dbg = kernel.gate._text_input("probe")
-    print(f"      [debug] gate.armed={kernel.gate.armed} input_probe={_dbg!r} "
-          f"voice={kernel.gate._voice_active()}")
     kernel.control.register("smoke_proc", [sys.executable, "-c", "import time;time.sleep(30)"],
                              str(kernel.config.root))
     started = kernel.control.dispatch("smoke_proc", "start")
