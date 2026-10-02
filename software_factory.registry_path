@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "saved_at": 1790917816.6252115,
+  "saved_at": 1790917885.0242462,
   "programs": [
     {
       "id": "sw_8fcc67bd",
@@ -332,6 +332,34 @@
         "installed at 1790917816",
         "launched pid=64588",
         "stop at 1790917817"
+      ]
+    },
+    {
+      "id": "sw_563d4155",
+      "name": "hello_sir",
+      "summary": "Hello program for: hello world greeting program",
+      "spec": "hello world greeting program",
+      "language": "python",
+      "entry": "main.py",
+      "path": "C:\\Users\\esakk\\jarvis-os\\software_factory.build_root\\sw_563d4155",
+      "status": "stopped",
+      "built_at": 1790917883.8386073,
+      "installed": true,
+      "launched_at": 1790917883.9771929,
+      "pid": 60136,
+      "notes": "Generated locally as a template; ask for a richer build.",
+      "test": {
+        "ok": true,
+        "stage": "execute",
+        "stdout": "Hello, Sir. Working on: hello world greeting program\n",
+        "stderr": "",
+        "returncode": 0,
+        "timed_out": false
+      },
+      "history": [
+        "installed at 1790917884",
+        "launched pid=60136",
+        "stop at 1790917885"
       ]
     }
   ]
