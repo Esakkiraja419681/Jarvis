@@ -89,7 +89,12 @@ class SoftwareRegistry:
         for item in raw.get("programs", []) if isinstance(raw, dict) else []:
             if isinstance(item, dict) and item.get("id"):
                 known = {f for f in Program.__slots__}
-                program = Program(**{k: v for k, v in item.items() if k in known})
+                # to_dict() serialises program_id as "id"; map it back on load
+                # so the registry survives a restart.
+                fields = dict(item)
+                if "id" in fields:
+                    fields["program_id"] = fields.pop("id")
+                program = Program(**{k: v for k, v in fields.items() if k in known})
                 self._programs[program.program_id] = program
         return self
 
@@ -134,7 +139,7 @@ class SoftwareFactory:
         self.llm = llm
         self.memory = memory
         self.gate = gate
-        self.control = control
+        self.bridge = control
         self.sandbox = sandbox
         self.audit = audit
         self.root = Path(root or config.resolve("software_factory.build_root"))
@@ -274,7 +279,7 @@ class SoftwareFactory:
             return {"ok": False, "error": f"entry file missing: {entry_path}"}
 
         argv = self._argv(program)
-        self.control.register(program.program_id, argv, program.path,
+        self.bridge.register(program.program_id, argv, program.path,
                               env={"JARVIS_PROGRAM": program.program_id,
                                    "JARVIS_SIR": self.config.honorific()})
         program.installed = True
@@ -299,7 +304,7 @@ class SoftwareFactory:
         if not program.installed:
             return {"ok": False,
                     "error": f"not installed yet - run 'install {program.program_id}' first"}
-        result = self.control.dispatch(program.program_id, "start", args or [])
+        result = self.bridge.dispatch(program.program_id, "start", args or [])
         if result.get("ok"):
             program.status = "running"
             program.launched_at = time.time()
@@ -315,7 +320,7 @@ class SoftwareFactory:
         program = self.registry.get(program_id)
         if program is None:
             return {"ok": False, "error": f"no program matching '{program_id}'"}
-        result = self.control.dispatch(program.program_id, action, args or [])
+        result = self.bridge.dispatch(program.program_id, action, args or [])
         if result.get("ok"):
             if action in ("stop", "restart"):
                 program.status = "stopped" if action == "stop" else "running"
@@ -330,7 +335,7 @@ class SoftwareFactory:
             program = self.registry.get(pid)
             if program is None:
                 continue
-            state = self.control.dispatch(pid, "status", [])
+            state = self.bridge.dispatch(pid, "status", [])
             out.append({"id": program.program_id, "name": program.name,
                         "status": program.status, "installed": program.installed,
                         "pid": program.pid, "detail": state})
@@ -341,7 +346,7 @@ class SoftwareFactory:
         program = self.registry.get(program_id)
         if program is None:
             return {"ok": False, "error": f"no program matching '{program_id}'"}
-        self.control.dispatch(program.program_id, "stop", [])
+        self.bridge.dispatch(program.program_id, "stop", [])
         if self.gate is not None and not self.gate.approve(
             "file_delete", f"Delete '{program.name}' and everything in {program.path}?",
             detail={"program": program.program_id},

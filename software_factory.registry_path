@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "saved_at": 1790916331.5404696,
+  "programs": [
+    {
+      "id": "sw_8fcc67bd",
+      "name": "hello_sir",
+      "summary": "Hello program for: hello world greeting program",
+      "spec": "hello world greeting program",
+      "language": "python",
+      "entry": "main.py",
+      "path": "C:\\Users\\esakk\\jarvis-os\\software_factory.build_root\\sw_8fcc67bd",
+      "status": "installed",
+      "built_at": 1790916050.7075226,
+      "installed": true,
+      "launched_at": null,
+      "pid": null,
+      "notes": "Generated locally as a template; ask for a richer build.",
+      "test": {
+        "ok": true,
+        "stage": "execute",
+        "stdout": "Hello, Sir. Working on: hello world greeting program\n",
+        "stderr": "",
+        "returncode": 0,
+        "timed_out": false
+      },
+      "history": [
+        "installed at 1790916051"
+      ]
+    },
+    {
+      "id": "sw_cc97c6d5",
+      "name": "hello_sir",
+      "summary": "Hello program for: hello world greeting program",
+      "spec": "hello world greeting program",
+      "language": "python",
+      "entry": "main.py",
+      "path": "C:\\Users\\esakk\\jarvis-os\\software_factory.build_root\\sw_cc97c6d5",
+      "status": "running",
+      "built_at": 1790916209.8556604,
+      "installed": true,
+      "launched_at": 1790916209.9966056,
+      "pid": 56652,
+      "notes": "Generated locally as a template; ask for a richer build.",
+      "test": {
+        "ok": true,
+        "stage": "execute",
+        "stdout": "Hello, Sir. Working on: hello world greeting program\n",
+        "stderr": "",
+        "returncode": 0,
+        "timed_out": false
+      },
+      "history": [
+        "installed at 1790916210",
+        "launched pid=56652"
+      ]
+    },
+    {
+      "id": "sw_6b116297",
+      "name": "hello_sir",
+      "summary": "Hello program for: hello world greeting program",
+      "spec": "hello world greeting program",
+      "language": "python",
+      "entry": "main.py",
+      "path": "C:\\Users\\esakk\\jarvis-os\\software_factory.build_root\\sw_6b116297",
+      "status": "running",
+      "built_at": 1790916248.6385987,
+      "installed": true,
+      "launched_at": 1790916248.7767973,
+      "pid": 54032,
+      "notes": "Generated locally as a template; ask for a richer build.",
+      "test": {
+        "ok": true,
+        "stage": "execute",
+        "stdout": "Hello, Sir. Working on: hello world greeting program\n",
+        "stderr": "",
+        "returncode": 0,
+        "timed_out": false
+      },
+      "history": [
+        "installed at 1790916249",
+        "launched pid=54032"
+      ]
+    },
+    {
+      "id": "sw_6d39d146",
+      "name": "hello_sir",
+      "summary": "Hello program for: hello world greeting program",
+      "spec": "hello world greeting program",
+      "language": "python",
+      "entry": "main.py",
+      "path": "C:\\Users\\esakk\\jarvis-os\\software_factory.build_root\\sw_6d39d146",
+      "status": "stopped",
+      "built_at": 1790916330.3463447,
+      "installed": true,
+      "launched_at": 1790916330.4946218,
+      "pid": 60708,
+      "notes": "Generated locally as a template; ask for a richer build.",
+      "test": {
+        "ok": true,
+        "stage": "execute",
+        "stdout": "Hello, Sir. Working on: hello world greeting program\n",
+        "stderr": "",
+        "returncode": 0,
+        "timed_out": false
+      },
+      "history": [
+        "installed at 1790916330",
+        "launched pid=60708",
+        "stop at 1790916332"
+      ]
+    }
+  ]
+}

@@ -147,7 +147,7 @@ class ControlBridge:
         except (OSError, ValueError) as exc:
             log.close()
             return {"ok": False, "error": f"failed to start: {exc}"}
-        proc.pid, proc.status, proc.started_at = popen.popen.pid, "running", time.time()
+        proc.pid, proc.status, proc.started_at = popen.pid, "running", time.time()
         proc.stopped_at, proc.exit_code = None, None
         return {"ok": True, "status": "running", "pid": proc.pid,
                 "message": f"'{program_id}' started as pid {proc.pid}"}

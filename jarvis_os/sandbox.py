@@ -97,10 +97,10 @@ class PythonSandbox:
         self.runs = 0
 
     # ------------------------------------------------------------- helpers
-    def _preload(self) -> bool:
+    def _preload(self) -> str:
         """Memory caps are POSIX-only; preload a rlimit where supported."""
         if os.name == "nt":
-            return False
+            return ""
         return (
             f"import resource\n"
             f"resource.setrlimit(resource.RLIMIT_AS, "
@@ -110,7 +110,7 @@ class PythonSandbox:
     def _wrapper(self) -> str:
         honorific = self.config.honorific()
         return _SNIPPET.replace("{honorific!r}", repr(honorific)) \
-                        .replace("{SANDBOX_PRELUDE}", _PRELUDE + self._preload())
+                        .replace("{SANDBOX_PRELUDE}", PRELUDE + self._preload())
 
     # ----------------------------------------------------------------- run
     def run(self, code: str, timeout: float | None = None,
@@ -204,7 +204,7 @@ ALLOWED_COMMANDS: dict[str, set[str]] = {
     },
 }
 
-_META = set("| & ; < > ` $ ( ) { } [ ] * ? ! # \n")
+_META = frozenset("|&;<>`$(){}[]*?!#\n\t\\\"'")
 
 
 class ShellSandbox:

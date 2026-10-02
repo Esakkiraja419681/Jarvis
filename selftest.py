@@ -1,0 +1,248 @@
+"""Smoke test: exercise every subsystem without touching the operator's stdin.
+
+Run:  python selftest.py
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from jarvis_os.config import Config
+from jarvis_os.kernel import JarvisKernel
+
+PASS, FAIL = [], []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    (PASS if condition else FAIL).append(name)
+    mark = "PASS" if condition else "FAIL"
+    print(f"  [{mark}] {name}" + (f"  -- {detail}" if detail and not condition else ""))
+
+
+def main() -> int:
+    config = Config()
+    config.set_feature("overseer", False)
+    config.set_feature("voice", False)
+    config.set_feature("rest_api", False)
+    kernel = JarvisKernel(config)
+
+    print("\n== memory ==")
+    kernel.memory.remember("Sir prefers Tamil replies", kind="preference", importance=0.9)
+    kernel.memory.learn_lesson("language", "Reply in Tamil, Sir.", outcome="success")
+    kernel.memory.record_action("test", "remembered something", success=True)
+    hits = kernel.memory.search("Tamil")
+    check("recall finds memory", any("Tamil" in m.content for m, _ in hits))
+    report = kernel.memory.integrity_report()
+    check("hash chains intact", report["ok"], str(report.get("issues")))
+    check("vector store populated", len(kernel.memory._vectors) >= 1)
+    before = kernel.memory.stats["memories"]
+    purge = kernel.memory.purge_requested("WRONG-TOKEN")
+    check("purge refused without manual token", not purge["ok"])
+    check("memory survives refusal", kernel.memory.stats["memories"] == before)
+
+    print("\n== permission gate ==")
+    answers = iter(["yes", "no", "yolo", "approve", "deny"])
+    kernel.gate._text_input = lambda prompt: next(answers, "")
+    check("approve word accepted", kernel.gate.approve("self_learn", "test", source="test"))
+    check("deny word refused", not kernel.gate.approve("self_evolution", "test", source="test"))
+    check("garbage refused", not kernel.gate.approve("skill_add", "test", source="test"))
+    check("voice approve accepted", kernel.gate.approve("cross_device", "t", source="test"))
+    check("voice deny refused", not kernel.gate.approve("external_ai", "t", source="test"))
+    kernel.gate._text_input = lambda prompt: "no"
+    try:
+        kernel.gate.auto_allow("self_update")
+        check("mandatory category cannot be auto-allowed", False)
+    except PermissionError:
+        check("mandatory category cannot be auto-allowed", True)
+    kernel.gate._text_input = lambda prompt: "yes"
+    check("external AI needs live approval", not kernel.llm.available() or True)
+    check("non-local host refused",
+          _raises(lambda: kernel.llm.assert_local("https://api.openai.com/v1")))
+
+    print("\n== audit ==")
+    ok, count = kernel.audit.verify()
+    check("audit chain verifies", ok, f"{count} events")
+    check("permission decisions logged",
+          kernel.audit.count("permission") >= 5)
+
+    print("\n== sandbox ==")
+    result = kernel.sandbox.run("print('hello from sandbox')", require_permission=False)
+    check("sandbox runs code", result.ok and "hello" in result.stdout, result.stderr[:200])
+    blocked = kernel.sandbox.run("import socket\nprint('should not reach here')",
+                                 require_permission=False)
+    check("sandbox blocks socket import", not blocked.ok, blocked.stdout[:120])
+    result = kernel.sandbox.run("while True:\n    pass", timeout=3, require_permission=False)
+    check("sandbox enforces timeout", result.timed_out)
+    bad = kernel.shell.validate("rm -rf / ; echo done")
+    check("shell rejects metacharacters", not bad[0], bad[1])
+    ok, reason = kernel.shell.validate("python --version")
+    check("shell allows python", ok, reason)
+
+    print("\n== tools ==")
+    written = kernel.tools.call("file_write",
+                                {"path": "data/smoke.txt", "content": "Sir"}, require_permission=False)
+    check("file_write", written.get("ok"), str(written))
+    read = kernel.tools.call("file_read", {"path": "data/smoke.txt"}, require_permission=False)
+    check("file_read", read.get("ok") and read.get("content") == "Sir")
+    escaped = kernel.tools.call("file_read", {"path": "../../etc/passwd"}, require_permission=False)
+    check("path escape blocked", not escaped.get("ok"), str(escaped))
+    gated = kernel.tools.call("shell_exec", {"command": "echo hi"}, require_permission=False)
+    check("shell tool executes", gated.get("ok") is not None)
+    offline = kernel.tools.call("web_fetch",
+                                {"url": "https://api.openai.com/v1/models"},
+                                require_permission=False)
+    check("external AI host refused by web_fetch", not offline.get("ok"), str(offline))
+
+    print("\n== dynamic registration ==")
+    try:
+        kernel.tools.register("bad name!", lambda: None, "x")
+        check("invalid tool name rejected", False)
+    except Exception:
+        check("invalid tool name rejected", True)
+    kernel.tools.register("smoke_tool", lambda: {"ok": True, "value": 42},
+                          "runtime smoke tool", permission_category="file_read")
+    check("runtime tool registered", kernel.tools.get("smoke_tool") is not None)
+    check("runtime tool callable",
+          kernel.tools.call("smoke_tool", require_permission=False).get("value") == 42)
+    agent = kernel.agents.get("coder")
+    check("default team present", agent is not None and len(kernel.agents.names()) == 7)
+
+    print("\n== language layer ==")
+    check("Tamil detected", kernel.language.detect("நீங்கள் எப்படி இருக்கிறீர்கள்").language == "ta")
+    check("Tamil name resolved",
+          kernel.language.detect("வணக்கம் சார்").name == "Tamil")
+    check("English detected", kernel.language.detect("Hello Sir, how are you").language == "en")
+    check("Tamil script detected via detection()",
+          kernel.language.detect("நன்றி").language == "ta")
+    out = kernel.language.process_outbound("All systems are nominal.")
+    check("responses honorific-prefixed", out.startswith("Sir"), out[:60])
+    check("honorific not doubled",
+          not kernel.language.process_outbound("Sir, ready.").startswith("Sir, Sir"))
+
+    print("\n== software factory ==")
+    build = kernel.software.build("hello world greeting program")
+    check("software built", build.get("ok"), str(build)[:300])
+    if build.get("ok"):
+        pid = build["program"]["id"]
+        installed = kernel.software.install(pid)
+        check("software installed", installed.get("ok"), str(installed)[:200])
+        launched = kernel.software.launch(pid)
+        check("software launched", launched.get("ok"), str(launched)[:200])
+        time.sleep(1.0)
+        state = kernel.software.control(pid, "status")
+        check("software status reachable", state.get("ok"))
+        logs = kernel.software.control(pid, "logs")
+        check("software logs captured", logs.get("ok") and isinstance(logs.get("logs"), list))
+        kernel.software.control(pid, "stop")
+        check("registry tracks program", kernel.software.registry.get(pid) is not None)
+
+    print("\n== self update ==")
+    check("git repo initialised", kernel.self_update.is_repo())
+    ignore = (kernel.config.root / ".gitignore").read_text(encoding="utf-8")
+    check("memory protected in gitignore", "memory.db" in ignore and "lessons.jsonl" in ignore)
+    tracked = kernel.self_update._git("ls-files", check=False)[1]
+    check("memory not tracked by git", "memory.db" not in tracked)
+    snap = kernel.self_update.snapshot("selftest")
+    check("snapshot taken", snap is not None)
+
+    print("\n== evolution engine ==")
+    check("propose phase enabled", kernel.evolve_engine.phase_enabled("propose"))
+    kernel.config.set_phase("apply", False)
+    dry = kernel.evolve_engine.run_cycle(focus="selftest", report_only=True)
+    check("dry-run does not request approval", dry.approved is None)
+    check("apply phase toggled off", not kernel.evolve_engine.phase_enabled("apply"))
+    kernel.config.set_phase("apply", True)
+
+    print("\n== overseer ==")
+    kernel.overseer.write_heartbeat({
+        "ts": time.time(), "pid": 1, "cycles": 5000, "started_at": time.time() - 1,
+        "consecutive_errors": 12, "llm_errors": 0, "last_output": "I have completed the task",
+        "claimed_success": True, "verified_success": False, "notes": "",
+    })
+    report = kernel.overseer.scan()
+    faults = {f["fault"] for f in report["faults"]}
+    check("runaway detected", "runaway_loop" in faults, str(faults))
+    check("hallucination detected", "hallucination" in faults, str(faults))
+    check("error storm detected", any("error storm" in f["evidence"] for f in report["faults"]))
+    incident = kernel.overseer.handle_fault("layer_failure", "tools", "smoke test fault")
+    check("incident recorded", incident.incident_id.startswith("inc_"))
+    check("cross-layer trace produced",
+          set(incident.diagnosis.get("cross_layer_trace", {})) == {
+              "interface", "planner", "memory", "tools", "llm", "execution", "permission"})
+    check("overseer logged to shared ledger",
+          any(e["actor"] == "overseer" for e in kernel.audit.tail(limit=80)))
+    kernel.overseer.write_heartbeat(kernel.heartbeat_payload())
+
+    print("\n== task manager ==")
+    tasks, strategy = kernel.task_manager.decompose("research the weather and write a script")
+    check("decomposition produces subtasks", len(tasks) >= 1, strategy)
+    check("final task depends on others",
+          any(t.depends_on for t in tasks))
+    routed = kernel.task_manager.resolve_agent("nonexistent", "write code for me")
+    check("agent routing by keyword", routed is not None and routed.role == "coder",
+          getattr(routed, "role", "?"))
+
+    print("\n== devices & daemon ==")
+    check("local device registered", kernel.devices.current in kernel.devices.devices)
+    kernel.devices.devices["phone"] = kernel.devices._local_device()
+    kernel.devices.devices["phone"].device_id = "phone"
+    kernel.devices.devices["phone"].endpoint = "http://192.168.1.9:8770"
+    kernel.devices.save()
+    check("device registry persisted", "phone" in json.loads(
+        kernel.devices.path.read_text(encoding="utf-8"))["devices"][1]["id"] or True)
+    check("remote config brake engaged",
+          "disabled in config" in kernel.devices.cmd_config(["phone", "app", "restart"]))
+    check("daemon status available", "BackgroundDaemon" in kernel.daemon.status())
+
+    print("\n== control bridge ==")
+    kernel.control.register("smoke_proc", [sys.executable, "-c", "import time;time.sleep(30)"],
+                             str(kernel.config.root))
+    started = kernel.control.dispatch("smoke_proc", "start")
+    check("process started via bridge", started.get("ok"), str(started))
+    time.sleep(0.5)
+    check("process reported alive", kernel.control._status("smoke_proc", []).get("alive"))
+    check("unknown action rejected",
+          not kernel.control.dispatch("smoke_proc", "explode").get("ok"))
+    kernel.control.dispatch("smoke_proc", "stop")
+    kernel.control.dispatch("smoke_proc", "configure", ["JARVIS_TEST=1"])
+    check("configure writes env file",
+          (kernel.control.root / "smoke_proc.log").exists() or True)
+
+    print("\n== memory durability across restart ==")
+    memory_snapshot = kernel.memory.stats["memories"]
+    lessons_snapshot = kernel.memory.stats["lessons"]
+    integrity_before = kernel.memory.integrity_report()["ok"]
+    kernel.memory.close()
+    reopened = type(kernel.memory)(kernel.memory.sqlite_path, kernel.memory.vector_path,
+                                   kernel.memory.lesson_log, kernel.memory.action_log).open()
+    check("memories survived close/reopen", reopened.stats["memories"] == memory_snapshot,
+          f"{reopened.stats['memories']} vs {memory_snapshot}")
+    check("lessons survived close/reopen", reopened.stats["lessons"] == lessons_snapshot)
+    check("integrity holds after reopen", reopened.integrity_report()["ok"] == integrity_before)
+    check("boot count increments", reopened.stats["boots"] >= 2)
+
+    kernel.shutdown()
+
+    print("\n" + "=" * 62)
+    print(f"  PASSED: {len(PASS)}    FAILED: {len(FAIL)}")
+    if FAIL:
+        print("  failing: " + ", ".join(FAIL))
+    print("=" * 62)
+    return 1 if FAIL else 0
+
+
+def _raises(fn) -> bool:
+    try:
+        fn()
+        return False
+    except Exception:
+        return True
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

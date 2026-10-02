@@ -226,6 +226,7 @@ class PersistentMemory:
             for path in (self.sqlite_path, self.vector_path, self.lesson_log, self.action_log):
                 path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(self.sqlite_path), check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
             self._conn.executescript(_SCHEMA)
             self._conn.commit()
             self._lesson_prev = self._last_hash("lessons")
@@ -390,6 +391,28 @@ class PersistentMemory:
         )
 
     # -------------------------------------------------------------- lessons
+    @staticmethod
+    def _rebuild_lesson(row: sqlite3.Row) -> dict[str, Any]:
+        """Rebuild the exact dict that was hashed when the lesson was written."""
+        return {
+            "id": row["id"], "topic": row["topic"], "lesson": row["lesson"],
+            "outcome": row["outcome"], "weight": float(row["weight"]),
+            "created_at": float(row["created_at"]),
+        }
+
+    @staticmethod
+    def _rebuild_action(row: sqlite3.Row) -> dict[str, Any]:
+        """Rebuild the exact dict that was hashed when the action was written."""
+        try:
+            meta = json.loads(row["meta"]) if row["meta"] else {}
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        return {
+            "id": row["id"], "kind": row["kind"], "summary": row["summary"],
+            "result": row["result"], "success": bool(row["success"]),
+            "meta": meta, "created_at": float(row["created_at"]),
+        }
+
     def learn_lesson(self, topic: str, lesson: str,
                      outcome: str = "neutral", weight: float = 0.5) -> Lesson:
         now = time.time()
@@ -544,6 +567,10 @@ class PersistentMemory:
     def integrity_report(self) -> dict[str, Any]:
         """Verify both hash chains. Used by the Overseer after every restart."""
         report: dict[str, Any] = {"ok": True, "issues": [], "stats": dict(self.stats)}
+        rebuilders = {
+            "lessons": self._rebuild_lesson,
+            "actions": self._rebuild_action,
+        }
         for table, jsonl, label in (
             ("lessons", self.lesson_log, "lesson"),
             ("actions", self.action_log, "action"),
@@ -551,18 +578,19 @@ class PersistentMemory:
             prev = ""
             try:
                 rows = self._require().execute(
-                    f"SELECT id, created_at, prev_hash, hash FROM {table} ORDER BY rowid ASC"
+                    f"SELECT * FROM {table} ORDER BY rowid ASC"
                 ).fetchall()
             except sqlite3.Error as exc:
                 report["ok"] = False
                 report["issues"].append(f"{label} table unreadable: {exc}")
                 continue
-            for rid, created, prev_hash, digest in rows:
+            for row in rows:
+                rid, prev_hash, digest = row["id"], row["prev_hash"], row["hash"]
                 if prev_hash != prev:
                     report["ok"] = False
                     report["issues"].append(f"{label} chain break at {rid}")
                     break
-                payload = {"id": rid, "created_at": created, "prev_hash": prev_hash}
+                payload = rebuilders[table](row) | {"prev_hash": prev_hash}
                 if hashlib.sha256(
                     prev.encode("utf-8") + _canonical(payload).encode("utf-8")
                 ).hexdigest() != digest:
