@@ -75,6 +75,14 @@ class JarvisKernel:
             cfg.resolve(cfg.get("audit.ledger_path", "data/audit_ledger.jsonl")),
             enabled=cfg.feature("audit_log", True),
         ).connect()
+        # The Overseer appends to this ledger from its own process, so a fork
+        # must be re-linked at boot. No event is ever discarded.
+        audit_ok, _ = self.audit.verify()
+        if not audit_ok:
+            repaired = self.audit.repair_chain()
+            self.audit.record("audit", "chain_repair", "ok",
+                              {"relinked": repaired.get("relinked"),
+                               "events": repaired.get("events")})
 
         self.memory = PersistentMemory(
             cfg.resolve(cfg.get("memory.sqlite_path", "data/memory.db")),

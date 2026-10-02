@@ -80,6 +80,41 @@ def main() -> int:
     check("permission decisions logged",
           kernel.audit.count("permission") >= 5)
 
+    print("\n== concurrent multi-process audit ==")
+    # The Overseer is a SEPARATE process on the same ledger, so two live
+    # writers must not fork the chain.
+    import subprocess as _sp
+    import tempfile
+    child_src = (
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+        "from jarvis_os.config import Config\n"
+        "from jarvis_os.audit import AuditLedger\n"
+        "c = Config()\n"
+        "a = AuditLedger(c.resolve('data/audit.db'),"
+        " c.resolve('data/audit_ledger.jsonl')).connect()\n"
+        "for i in range(25):\n"
+        "    a.record('selftest', 'concurrent_' + str(i), 'ok', {'n': i},"
+        " actor='overseer')\n"
+        "print(a.verify()[0])\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False,
+                                     encoding="utf-8") as fh:
+        fh.write(child_src)
+        child_path = fh.name
+    child = _sp.run([sys.executable, child_path], capture_output=True, text=True,
+                    timeout=180)
+    check("second process wrote to the shared ledger",
+          child.stdout.strip().endswith("True"),
+          (child.stdout[-200:] + child.stderr[-300:]))
+    for i in range(25):
+        kernel.audit.record("selftest", f"concurrent_local_{i}", "ok", {"n": i})
+    ok2, count2 = kernel.audit.verify()
+    check("chain intact after interleaved writers", ok2, f"{count2} events")
+    check("no events lost",
+          kernel.audit.count("selftest") >= 50, str(kernel.audit.count("selftest")))
+    Path(child_path).unlink(missing_ok=True)
+
     print("\n== sandbox ==")
     result = kernel.sandbox.run("print('hello from sandbox')", require_permission=False)
     check("sandbox runs code", result.ok and "hello" in result.stdout, result.stderr[:200])
