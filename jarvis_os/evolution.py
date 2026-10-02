@@ -119,7 +119,7 @@ class SelfEvolution:
         self._counter += 1
         cycle = EvolutionCycle(cycle_id=f"evo_{time.strftime('%Y%m%d-%H%M%S')}_{self._counter}")
         self.cycles.append(cycle)
-        self.cycles = self.cycles[-40]
+        self.cycles = self.cycles[-40:]
 
         self._log(cycle, "cycle_start", {"focus": focus, "dry_run": report_only})
 
