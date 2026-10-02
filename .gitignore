@@ -1,0 +1,12 @@
+*.key
+config.json
+data/actions.jsonl
+data/audit.db*
+data/audit_ledger.jsonl
+data/control.token
+data/heartbeat.json
+data/lessons.jsonl
+data/memory.db
+data/memory.db-*
+data/vectors.json
+data/vectors.json.tmp
