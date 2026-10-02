@@ -116,7 +116,6 @@ class UniversalLanguageLayer:
             from argostranslate import translate as _t
             self._argos_translate = _t.translate
             self._pkg = pkg
-            self._update_argos_index()
             self._argos_installed = True
             self.backend = "argos"
         except Exception:  # noqa: BLE001 - Argos is optional
@@ -128,24 +127,63 @@ class UniversalLanguageLayer:
             except Exception:  # noqa: BLE001
                 self.backend = "none"
 
-    def _update_argos_index(self) -> None:
+    def _installed_argos_pairs(self) -> set[tuple[str, str]]:
+        """Language pairs already present on disk. Never touches the network."""
+        pairs: set[tuple[str, str]] = set()
+        if not self._argos_installed:
+            return pairs
+        try:
+            for pkg_item in self._pkg.get_installed_packages():
+                pairs.add((pkg_item.from_code, pkg_item.to_code))
+        except Exception:  # noqa: BLE001
+            pass
+        return pairs
+
+    def install_argos_packages(self, approved: bool = False) -> dict[str, Any]:
+        """Download offline translation models. OFF by default, never automatic.
+
+        This is the only method in the language layer that touches the network,
+        and it refuses to run unless the operator explicitly approved *this*
+        call. Jarvis will not silently fetch anything at boot.
+        """
+        if not self._argos_installed:
+            return {"ok": False, "error": "argostranslate is not installed"}
+        if not approved:
+            return {"ok": False, "error":
+                    "refused: downloading models requires explicit operator "
+                    "approval for this specific request"}
         try:
             self._pkg.update_package_index()
             available = self._pkg.get_available_packages()
-            target = self._pkg.get_installed_packages()
-            installed_pairs = {(p.from_code, p.to_code) for p in target}
-            wanted: list[tuple[str, str]] = []
-            for language in {self.preferred, "en", self.target}:
-                for pkg_item in available:
-                    if pkg_item.from_code == language and pkg_item.to_code not in installed_pairs:
-                        wanted.append(pkg_item)
+            installed = self._installed_argos_pairs()
+            installed_targets = {src for src, dst in installed}
+            wanted = [p for p in available
+                      if p.from_code in {self.preferred, "en", self.target}
+                      and (p.from_code, p.to_code) not in installed]
+            wanted = [p for p in wanted if p.from_code not in installed_targets] or wanted
+            added: list[str] = []
             for pkg_item in wanted:
                 try:
                     self._pkg.install_from_path(pkg_item.download())
+                    added.append(f"{pkg_item.from_code}->{pkg_item.to_code}")
                 except Exception:  # noqa: BLE001
                     continue
-        except Exception:  # noqa: BLE001
-            pass
+            return {"ok": True, "installed": added,
+                    "pairs": sorted(f"{a}->{b}" for a, b in self._installed_argos_pairs())}
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
+
+    def missing_pairs(self) -> list[str]:
+        """Pairs the operator may want, reported so Jarvis can ask - not fetch."""
+        if not self._argos_installed:
+            return []
+        installed = self._installed_argos_pairs()
+        wanted = []
+        for src in {self.preferred, "en", self.target}:
+            for dst in {self.preferred, "en", self.target}:
+                if src != dst and (src, dst) not in installed:
+                    wanted.append(f"{src}->{dst}")
+        return sorted(set(wanted))
 
     def available_backends(self) -> list[str]:
         out = []

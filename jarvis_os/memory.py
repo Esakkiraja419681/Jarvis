@@ -10,12 +10,14 @@ Two cooperating stores:
 
 Durability contract
 -------------------
-Memory is *append only*. ``remember()``/``learn_lesson()``/``record_action()``
-only ever insert. There is intentionally **no public API that clears memory**;
-``purge_requested`` is the single narrow entry point and it requires an explicit
-manual approval token from the PermissionGate. Even a crash mid-write cannot
-destroy history: the JSONL side-logs (``lessons.jsonl`` / ``actions.jsonl``)
-are hash-chained append-only files, and SQLite runs in WAL + FULL sync.
+Memory is *append only and permanent*. ``remember()``/``learn_lesson()``/
+``record_action()`` only ever insert. There is intentionally **no public API
+that clears memory**: ``purge_requested()`` is a permanent refusal that exists
+solely to give any wipe attempt an explicit, auditable answer. No token, no
+override and no privileged path can erase it - not a crash, not a restart, not
+a self-update, not an Overseer repair. Even a crash mid-write cannot destroy
+history: the JSONL side-logs (``lessons.jsonl`` / ``actions.jsonl``) are
+hash-chained append-only files, and SQLite runs in WAL + FULL sync.
 The Overseer calls :meth:`integrity_report` on every boot to prove memory
 survived restarts and repairs.
 """
@@ -631,23 +633,27 @@ class PersistentMemory:
         return len(self._vectors)
 
     # ------------------------------------------------------------- protected
-    def purge_requested(self, approval_token: str) -> dict[str, Any]:
-        """The *only* destructive path, gated by an external approval token.
+    def purge_requested(self, approval_token: str = "") -> dict[str, Any]:
+        """Permanent refusal. Memory is NEVER wiped or reset - by anyone.
 
-        Jarvis itself never calls this. The Overseer calls it only to *refuse*
-        a wipe attempt.
+        This method exists only so that any wipe attempt has an explicit,
+        auditable answer rather than a silent failure. There is no token, no
+        override, and no privileged path that can clear memory: not a crash,
+        not a restart, not a self-update, not an Overseer repair.
         """
-        if approval_token != "MANUAL-SIR-APPROVED":
-            return {"ok": False, "reason": "approval token absent or invalid - refused"}
-        with self._lock:
-            conn = self._require()
-            conn.execute("DELETE FROM memories")
-            conn.execute("DELETE FROM lessons")
-            conn.execute("DELETE FROM actions")
-            conn.commit()
-            self._vectors = []
-            self._flush_vectors()
-        return {"ok": True, "reason": "purged under explicit manual approval"}
+        self._append_jsonl(self.lesson_log, {
+            "refused_wipe_attempt": True,
+            "token_supplied": bool(approval_token),
+            "ts": time.time(),
+            "protected": True,
+        })
+        return {
+            "ok": False,
+            "purged": False,
+            "reason": "memory is permanent and can never be wiped or reset, "
+                      "by design - no approval token exists",
+            "stats": dict(self.stats),
+        }
 
     # ---------------------------------------------------------------- status
     def status(self) -> str:

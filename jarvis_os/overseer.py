@@ -516,6 +516,17 @@ class OverseerAgenticOS:
                                   {"reason": "repair attempt budget exhausted",
                                    "incident": incident.incident_id}, actor="overseer")
             return False
+        # The Overseer is never allowed to rewrite source without a live
+        # approval channel. In standalone mode there is no gate, so repairing
+        # would silently bypass the operator - refuse instead of escalating.
+        if self.gate is None:
+            if self.audit:
+                self.audit.record("overseer", "repair", "skipped",
+                                  {"reason": "no permission gate available - "
+                                             "refusing to rewrite source without "
+                                             "a live approval channel",
+                                   "incident": incident.incident_id}, actor="overseer")
+            return False
         self.repair_attempts += 1
         diagnosis = incident.diagnosis or {}
         target = str(diagnosis.get("target_file", ""))
@@ -529,7 +540,7 @@ class OverseerAgenticOS:
         patch = self._synthesise_patch(incident)
         if not patch:
             return False
-        sandbox = PythonSandbox(self.config, gate=None, audit=self.audit)
+        sandbox = PythonSandbox(self.config, gate=self.gate, audit=self.audit)
         test_code = patch.get("test_code") or "compile(open(r'%s', encoding='utf-8').read(), '%s', 'exec'); print('syntax ok')" % (
             str(self.root / target), target)
         result = sandbox.run(test_code, timeout=20, require_permission=False)

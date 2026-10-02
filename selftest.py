@@ -44,6 +44,16 @@ def main() -> int:
     purge = kernel.memory.purge_requested("WRONG-TOKEN")
     check("purge refused without manual token", not purge["ok"])
     check("memory survives refusal", kernel.memory.stats["memories"] == before)
+    # The invariant is absolute: no token may ever wipe memory.
+    for token in ("MANUAL-SIR-APPROVED", "yes", "approve", "Sir", ""):
+        outcome = kernel.memory.purge_requested(token)
+        if outcome.get("ok"):
+            check(f"purge refused for token {token!r}", False, str(outcome))
+            break
+    else:
+        check("purge refused for every token", True)
+    check("memory never wiped", kernel.memory.stats["memories"] == before)
+    check("lessons never wiped", kernel.memory.stats["lessons"] >= 1)
 
     print("\n== permission gate ==")
     answers = iter(["yes", "no", "yolo", "approve", "deny"])
@@ -123,6 +133,12 @@ def main() -> int:
     check("responses honorific-prefixed", out.startswith("Sir"), out[:60])
     check("honorific not doubled",
           not kernel.language.process_outbound("Sir, ready.").startswith("Sir, Sir"))
+    check("translation never auto-downloads models",
+          not kernel.language.install_argos_packages().get("ok", True)
+          or kernel.language._argos_installed is False,
+          "install_argos_packages must refuse without explicit approval")
+    check("no argos boot hook remains",
+          not hasattr(kernel.language, "_update_argos_index"))
 
     print("\n== software factory ==")
     build = kernel.software.build("hello world greeting program")
@@ -178,6 +194,17 @@ def main() -> int:
           any(e["actor"] == "overseer" for e in kernel.audit.tail(limit=80)))
     kernel.overseer.write_heartbeat(kernel.heartbeat_payload())
 
+    # A repair with no live approval channel must refuse, never escalate.
+    from jarvis_os.overseer import OverseerAgenticOS
+    ungated = OverseerAgenticOS(config, audit=kernel.audit, memory=kernel.memory,
+                                llm=kernel.llm, gate=None, root=config.root)
+    inc2 = ungated.handle_fault("layer_failure", "tools", "ungated repair attempt")
+    check("ungated overseer refuses to rewrite source",
+          ungated.repair_attempts == 0, f"attempts={ungated.repair_attempts}")
+    check("ungated refusal is audited",
+          any(e["action"].startswith("repair:skipped")
+              for e in kernel.audit.tail(limit=40)))
+
     print("\n== task manager ==")
     tasks, strategy = kernel.task_manager.decompose("research the weather and write a script")
     check("decomposition produces subtasks", len(tasks) >= 1, strategy)
@@ -212,6 +239,51 @@ def main() -> int:
     kernel.control.dispatch("smoke_proc", "configure", ["JARVIS_TEST=1"])
     check("configure writes env file",
           (kernel.control.root / "smoke_proc.log").exists() or True)
+
+    print("\n== ollama tool-call normalisation ==")
+    from jarvis_os.llm import OllamaBackend
+    calls = OllamaBackend._normalise_tool_calls([
+        {"function": {"name": "file_read", "arguments": {"path": "x.txt"}}},
+        {"function": {"name": "shell_exec", "arguments": '{"command":"ls"}'}},
+        {"function": {"name": "bad_args", "arguments": "not json"}},
+        {"nothing": True},
+        "junk",
+    ])
+    check("native tool calls surfaced", len(calls) == 3, str(calls))
+    check("dict arguments preserved", calls[0]["arguments"] == {"path": "x.txt"})
+    check("json string arguments parsed", calls[1]["arguments"] == {"command": "ls"})
+    check("malformed arguments preserved, not dropped",
+          calls[2]["arguments"] == {"_raw": "not json"})
+    check("empty tool call list", OllamaBackend._normalise_tool_calls(None) == [])
+    from jarvis_os.agents import _extract_tool_calls
+
+    class _FakeReply:
+        text = ""
+        stats = {"tool_calls": calls}
+
+    extracted = _extract_tool_calls(_FakeReply())
+    check("agent can read ollama tool calls",
+          [c["name"] for c in extracted] == ["file_read", "shell_exec", "bad_args"],
+          str(extracted))
+
+    print("\n== external ai gating ==")
+    kernel.gate._text_input = lambda prompt: "no"
+    check("external provider refused when denied",
+          not kernel.llm.register_external_provider(
+              "openai", object(), "https://api.openai.com/v1", purpose="test"))
+    check("denial leaves no standing grant",
+          not kernel.llm.has_external("openai"))
+    kernel.gate._text_input = lambda prompt: "yes"
+    check("external provider registers when approved",
+          kernel.llm.register_external_provider(
+              "openai", object(), "https://api.openai.com/v1", purpose="test"))
+    check("grant is single-use",
+          kernel.llm.consume_external("openai") is not None
+          and not kernel.llm.has_external("openai"))
+    check("local ollama endpoint still enforced",
+          _raises(lambda: kernel.llm.assert_local("https://api.openai.com/v1")))
+    check("ollama itself still reachable-or-clean",
+          isinstance(kernel.llm.available(), bool))
 
     print("\n== memory durability across restart ==")
     memory_snapshot = kernel.memory.stats["memories"]

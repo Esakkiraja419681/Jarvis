@@ -166,8 +166,35 @@ class OllamaBackend:
                 "prompt_tokens": (data or {}).get("prompt_eval_count"),
                 "eval_tokens": (data or {}).get("eval_count"),
                 "total_duration_ms": (data or {}).get("total_duration"),
+                # Ollama returns native tool calls on the message; without this
+                # the agents can never actually invoke a tool.
+                "tool_calls": self._normalise_tool_calls(message.get("tool_calls")),
             },
         )
+
+    @staticmethod
+    def _normalise_tool_calls(raw: Any) -> list[dict[str, Any]]:
+        """Flatten Ollama's ``function``/``arguments`` envelope into a dict."""
+        calls: list[dict[str, Any]] = []
+        for call in raw or []:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if isinstance(function, dict):
+                name = function.get("name")
+                arguments = function.get("arguments")
+            else:
+                name = call.get("name")
+                arguments = call.get("arguments")
+            if not name:
+                continue
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except (json.JSONDecodeError, TypeError):
+                    arguments = {"_raw": arguments}
+            calls.append({"name": str(name), "arguments": arguments or {}})
+        return calls
 
     def embed(self, model: str, text: str) -> list[float]:
         data = self._post("/api/embeddings", {"model": model, "prompt": text})
@@ -233,32 +260,50 @@ class LLMClient:
         """Attach a non-Ollama backend - only with live manual approval.
 
         ``remember_grants`` is deliberately ignored here: the operator's rule is
-        "explicit manual permission each time".
+        "explicit manual permission each time". Registration is therefore a
+        *single-use* grant - it authorises exactly one call, never the default
+        backend and never a standing connection.
         """
         with self._lock:
             if str(self.config.get("llm.provider", "ollama")) != "ollama":
                 return False
-            self.assert_local(endpoint)  # raises if endpoint is off-box
+            # Approval is requested FIRST. Asserting locality up front would
+            # make every external endpoint impossible to approve at all.
             decision = self._manual_approval(
                 "external_ai",
                 {
                     "provider": provider,
                     "endpoint": endpoint,
                     "purpose": purpose or "unspecified",
-                    "note": "This connects Jarvis OS to a third-party AI API. "
-                            "Approve only if you intend to.",
+                    "note": "This connects Jarvis OS to a third-party AI API for "
+                            "ONE call. It does not become the default and the "
+                            "grant expires after that call. Approve only if you "
+                            "intend to.",
                 },
             )
             if not decision:
+                if self.audit:
+                    self.audit.record("external_ai", f"register:{provider}",
+                                      "denied", {"endpoint": endpoint})
                 return False
-            self._external[provider] = {"adapter": adapter, "endpoint": endpoint}
-            self._approved_once.add(provider)
+            self._external[provider] = {"adapter": adapter, "endpoint": endpoint,
+                                        "purpose": purpose}
             if self.audit:
                 self.audit.record(
                     "external_ai", f"register:{provider}", "approved",
-                    {"endpoint": endpoint, "purpose": purpose},
+                    {"endpoint": endpoint, "purpose": purpose, "single_use": True},
                 )
             return True
+
+    def consume_external(self, provider: str) -> dict[str, Any] | None:
+        """Take a single-use external grant, removing it on use."""
+        with self._lock:
+            entry = self._external.pop(provider, None)
+            return entry
+
+    def has_external(self, provider: str) -> bool:
+        with self._lock:
+            return provider in self._external
 
     def unregister_external_provider(self, provider: str) -> bool:
         with self._lock:

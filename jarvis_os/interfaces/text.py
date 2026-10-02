@@ -250,10 +250,12 @@ class TextCommandInterface:
             return
         detection = self.kernel.language.detect(text)
         english = self.kernel.language.translate(text, "en")
+        # process_outbound already applies the honorific, so print it directly
+        # instead of prefixing it a second time.
         native = self.kernel.language.process_outbound(english)
         self.plain(f"detected: {detection.name} ({detection.language}, {detection.confidence:.2f})")
         self.plain(f"english:   {english}")
-        self.plain(f"{self.config.honorific()}: {native}")
+        self.plain(native)
 
     def cmd_overseer(self, args: list[str]) -> None:
         sub = (args[0].lower() if args else "status")
