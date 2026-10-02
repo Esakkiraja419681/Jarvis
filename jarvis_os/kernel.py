@@ -498,7 +498,8 @@ class JarvisKernel:
         state = state.lower()
         if state in ("on", "1", "true", "yes", "enable"):
             ok, message = self.voice_iface.enable()
-            self.gate.voice_active = self.voice_iface.voice_active
+            # _voice_active is a callable consulted on every approval prompt.
+            self.gate._voice_active = lambda: self.voice_iface.voice_active
             return message
         if state in ("off", "0", "false", "no", "disable"):
             return self.voice_iface.disable()

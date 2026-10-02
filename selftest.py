@@ -264,7 +264,7 @@ def main() -> int:
     print("\n== control bridge ==")
     _dbg = kernel.gate._text_input("probe")
     print(f"      [debug] gate.armed={kernel.gate.armed} input_probe={_dbg!r} "
-          f"voice_active={kernel.gate.voice_active}")
+          f"voice={kernel.gate._voice_active()}")
     kernel.control.register("smoke_proc", [sys.executable, "-c", "import time;time.sleep(30)"],
                              str(kernel.config.root))
     started = kernel.control.dispatch("smoke_proc", "start")
