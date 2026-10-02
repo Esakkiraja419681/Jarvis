@@ -230,20 +230,25 @@ def main() -> int:
     kernel.overseer.write_heartbeat(kernel.heartbeat_payload())
 
     # A repair with no live approval channel must refuse, never escalate.
-    from jarvis_os.overseer import OverseerAgenticOS
+    # NOTE: drive repair() directly on a halted incident rather than
+    # handle_fault("permission_violation") - the real path calls halt_jarvis(),
+    # which taskkills this very process (correct behaviour, fatal in a test).
+    from jarvis_os.overseer import Incident, OverseerAgenticOS
     ungated = OverseerAgenticOS(config, audit=kernel.audit, memory=kernel.memory,
                                 llm=kernel.llm, gate=None, root=config.root)
-    # Bind a restart callback so halt_jarvis() succeeds: repair() only runs on a
-    # halted incident. Fault must be a halting class for the same reason.
-    ungated.bind_restart(lambda: None)
-    inc2 = ungated.handle_fault("permission_violation", "permissions",
-                                 "ungated repair attempt")
+    probe = Incident(incident_id="inc_ungated_probe", fault="permission_violation",
+                     layer="permissions", evidence="selftest probe")
+    probe.halted = True
+    probe.diagnosis = {"root_cause": "unauthorised mutation",
+                       "target_file": "jarvis_os/kernel.py"}
+    repaired = ungated.repair(probe)
     check("ungated overseer refuses to rewrite source",
-          ungated.repair_attempts == 0, f"attempts={ungated.repair_attempts}")
+          repaired is False and ungated.repair_attempts == 0,
+          f"repaired={repaired} attempts={ungated.repair_attempts}")
     check("ungated refusal is audited",
           any(e["action"] == "repair"
               and "no permission gate" in str(e["detail"].get("reason", ""))
-              and e["detail"].get("incident") == inc2.incident_id
+              and e["detail"].get("incident") == "inc_ungated_probe"
               for e in kernel.audit.tail(limit=5000, category="overseer")))
 
     print("\n== task manager ==")

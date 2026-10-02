@@ -1,0 +1,7 @@
+{
+  "loop_interval_max": 60,
+  "last_incident": "",
+  "llm_disabled": true,
+  "gate_disarm": true,
+  "tools_disabled": true
+}
