@@ -1,0 +1,6 @@
+{
+  "loop_interval_max": 60,
+  "last_incident": "",
+  "llm_disabled": true,
+  "tools_disabled": true
+}

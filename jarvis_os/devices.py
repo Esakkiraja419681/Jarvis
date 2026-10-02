@@ -82,7 +82,14 @@ class DeviceManager:
         for item in raw.get("devices", []) if isinstance(raw, dict) else []:
             if isinstance(item, dict) and item.get("id"):
                 known = set(Device.__slots__)
-                device = Device(**{k: v for k, v in item.items() if k in known})
+                # to_dict() serialises device_id/os_name as "id"/"os";
+                # map them back so the registry survives a restart.
+                fields = dict(item)
+                if "id" in fields:
+                    fields["device_id"] = fields.pop("id")
+                if "os" in fields:
+                    fields["os_name"] = fields.pop("os")
+                device = Device(**{k: v for k, v in fields.items() if k in known})
                 self.devices[device.device_id] = device
         return self
 

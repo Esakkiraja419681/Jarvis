@@ -1,0 +1,30 @@
+{
+  "current": "local",
+  "saved_at": 1790916440.0432558,
+  "devices": [
+    {
+      "id": "local",
+      "label": "LAPTOP-G1EUHLTR (this machine)",
+      "kind": "host",
+      "endpoint": "",
+      "os": "Windows 11",
+      "granted_at": 1790916432.6770453,
+      "last_seen": null,
+      "trusted": true,
+      "status": "local",
+      "notes": "The machine Jarvis OS is running on right now."
+    },
+    {
+      "id": "phone",
+      "label": "LAPTOP-G1EUHLTR (this machine)",
+      "kind": "host",
+      "endpoint": "http://192.168.1.9:8770",
+      "os": "Windows 11",
+      "granted_at": 1790916440.0432558,
+      "last_seen": null,
+      "trusted": true,
+      "status": "local",
+      "notes": "The machine Jarvis OS is running on right now."
+    }
+  ]
+}
