@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from jarvis_os.config import Config
 from jarvis_os.kernel import JarvisKernel
+from jarvis_os.permissions import PermissionGate
 
 PASS, FAIL = [], []
 
@@ -29,6 +30,10 @@ def main() -> int:
     config.set_feature("overseer", False)
     config.set_feature("voice", False)
     config.set_feature("rest_api", False)
+    # Deterministic starting state: an Overseer isolation left behind by an
+    # earlier crashed run would disarm the gate on boot (correct behaviour) and
+    # make every later approval fail. Clear it before booting.
+    config.resolve("data/overseer_control.json").unlink(missing_ok=True)
     kernel = JarvisKernel(config)
 
     print("\n== memory ==")
@@ -57,18 +62,34 @@ def main() -> int:
 
     print("\n== permission gate ==")
     answers = iter(["yes", "no", "yolo", "approve", "deny"])
-    kernel.gate._text_input = lambda prompt: next(answers, "")
-    check("approve word accepted", kernel.gate.approve("self_learn", "test", source="test"))
-    check("deny word refused", not kernel.gate.approve("self_evolution", "test", source="test"))
-    check("garbage refused", not kernel.gate.approve("skill_add", "test", source="test"))
-    check("voice approve accepted", kernel.gate.approve("cross_device", "t", source="test"))
-    check("voice deny refused", not kernel.gate.approve("external_ai", "t", source="test"))
-    kernel.gate._text_input = lambda prompt: "no"
+    # Use a private gate instance with no Overseer thread attached, so the
+    # answer sequence cannot be perturbed by background watchdog prompts.
+    pgate = PermissionGate(config, text_input=None)
+    pgate._text_input = lambda prompt: next(answers, "")
+    check("approve word accepted", pgate.approve("self_learn", "test", source="test"))
+    check("deny word refused", not pgate.approve("self_evolution", "test", source="test"))
+    check("garbage refused", not pgate.approve("skill_add", "test", source="test"))
+    check("voice approve accepted", pgate.approve("cross_device", "t", source="test"))
+    check("voice deny refused", not pgate.approve("external_ai", "t", source="test"))
+    pgate._text_input = lambda prompt: "no"
     try:
-        kernel.gate.auto_allow("self_update")
+        pgate.auto_allow("self_update")
         check("mandatory category cannot be auto-allowed", False)
     except PermissionError:
         check("mandatory category cannot be auto-allowed", True)
+    # A disarmed master switch must refuse even a correct answer.
+    pgate.disarm("selftest isolation probe")
+    pgate._text_input = lambda prompt: "yes"
+    check("disarmed gate refuses despite approval",
+          not pgate.approve("self_update", "t", source="test"))
+    pgate.disarm("selftest isolation probe")
+    pgate._text_input = lambda prompt: "yes"
+    check("disarmed gate refuses despite approval",
+          not pgate.approve("self_update", "t", source="test"))
+    # The Overseer may still ask the operator to repair the fault it raised.
+    check("overseer repair can override the disarm it caused",
+          pgate.approve("self_update", "t", source="overseer", override_disarm=True))
+    pgate.arm()
     kernel.gate._text_input = lambda prompt: "yes"
     check("external AI needs live approval", not kernel.llm.available() or True)
     check("non-local host refused",
