@@ -233,12 +233,18 @@ def main() -> int:
     from jarvis_os.overseer import OverseerAgenticOS
     ungated = OverseerAgenticOS(config, audit=kernel.audit, memory=kernel.memory,
                                 llm=kernel.llm, gate=None, root=config.root)
-    inc2 = ungated.handle_fault("layer_failure", "tools", "ungated repair attempt")
+    # Bind a restart callback so halt_jarvis() succeeds: repair() only runs on a
+    # halted incident. Fault must be a halting class for the same reason.
+    ungated.bind_restart(lambda: None)
+    inc2 = ungated.handle_fault("permission_violation", "permissions",
+                                 "ungated repair attempt")
     check("ungated overseer refuses to rewrite source",
           ungated.repair_attempts == 0, f"attempts={ungated.repair_attempts}")
     check("ungated refusal is audited",
-          any(e["action"] == "repair" and e["decision"] == "skipped"
-              for e in kernel.audit.tail(limit=500, category="overseer")))
+          any(e["action"] == "repair"
+              and "no permission gate" in str(e["detail"].get("reason", ""))
+              and e["detail"].get("incident") == inc2.incident_id
+              for e in kernel.audit.tail(limit=5000, category="overseer")))
 
     print("\n== task manager ==")
     tasks, strategy = kernel.task_manager.decompose("research the weather and write a script")
