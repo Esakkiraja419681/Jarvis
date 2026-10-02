@@ -265,6 +265,8 @@ class TextCommandInterface:
             self.say(self.kernel.overseer_control("stop"))
         elif sub == "scan":
             self.plain(self.kernel.overseer_control("scan"))
+        elif sub in ("clear", "reset", "release"):
+            self.say(self.kernel.overseer_control("clear"))
         else:
             self.plain(self.kernel.overseer_control("status"))
 

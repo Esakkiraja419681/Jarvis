@@ -557,7 +557,11 @@ class OverseerAgenticOS:
         # rewrites anything, and refuses to touch protected modules.
         write_result = updater.write_file(target, patch["content"],
                                           require_permission=diagnosis.get(
-                                              "needs_manual_approval", True))
+                                              "needs_manual_approval", True),
+                                          # The master switch may be down because
+                                          # of THIS incident; the operator must
+                                          # still be able to approve the repair.
+                                          override_disarm=True)
         if write_result.ok:
             self.repair_attempts = 0
             self._clear_control()
@@ -610,6 +614,16 @@ class OverseerAgenticOS:
             path.unlink(missing_ok=True)
         except OSError:
             pass
+
+    def clear_control(self) -> bool:
+        """Public, operator-driven release of any active layer isolation."""
+        path = self.config.resolve("data/overseer_control.json")
+        try:
+            existed = path.is_file()
+            path.unlink(missing_ok=True)
+            return existed
+        except OSError:
+            return False
 
     # -------------------------------------------------------------- restart
     def restart_jarvis(self, reason: str = "overseer") -> bool:

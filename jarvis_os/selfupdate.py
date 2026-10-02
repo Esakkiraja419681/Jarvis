@@ -176,7 +176,8 @@ class SelfUpdate:
 
     # --------------------------------------------------------------- patches
     def write_file(self, path: str, content: str,
-                   require_permission: bool = True) -> UpdateResult:
+                   require_permission: bool = True,
+                   override_disarm: bool = False) -> UpdateResult:
         """Patch one source file, gated by ``self_update`` approval."""
         if self.config.get("self_update.forbid_self_patch", True) and \
                 str(path).startswith(("jarvis_os/permissions", "jarvis_os/overseer")):
@@ -188,6 +189,7 @@ class SelfUpdate:
                 f"Jarvis requests permission to modify its own source file:\n  {path}",
                 detail={"path": path, "bytes": len(content),
                         "reason": "self-update patch"},
+                override_disarm=override_disarm,
             ):
                 self._log("patch", "denied", {"path": path})
                 return UpdateResult(False, "permission denied by operator")

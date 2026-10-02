@@ -333,9 +333,15 @@ def main() -> int:
     check("integrity holds after reopen", reopened.integrity_report()["ok"] == integrity_before)
     check("boot count increments", reopened.stats["boots"] >= 2)
 
-    kernel.shutdown()
+    # The fault injected above must not leave the next boot permanently
+    # disarmed - clear the isolation so the next run starts clean.
+    cleared = kernel.overseer_control("clear")
+    check("overseer isolation cleared", "armed again" in cleared, cleared)
+    check("gate armed after clear", kernel.gate.armed)
+    check("control file removed",
+          not kernel.config.resolve("data/overseer_control.json").exists())
 
-    print("\n" + "=" * 62)
+    kernel.shutdown()
     print(f"  PASSED: {len(PASS)}    FAILED: {len(FAIL)}")
     if FAIL:
         print("  failing: " + ", ".join(FAIL))

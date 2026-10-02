@@ -480,6 +480,16 @@ class JarvisKernel:
             self.overseer.stop()
             self.config.set_feature("overseer", False)
             return "Overseer stopped. I am unguarded, Sir - I would not advise it."
+        if action in ("clear", "reset", "release"):
+            # Operator escape hatch: drop any active isolation and re-arm.
+            self.overseer.clear_control()
+            if self.gate and not self.gate.armed:
+                self.gate.arm()
+            self.audit.record("overseer", "isolation_cleared", "ok",
+                              {"by": "operator"})
+            return ("Isolation cleared and the permission gate is armed again, Sir. "
+                    "Note: the Overseer will isolate the faulty layer again if it "
+                    "detects the same fault again.")
         if action == "scan":
             return self.overseer.scan_report()
         return self.overseer.status()

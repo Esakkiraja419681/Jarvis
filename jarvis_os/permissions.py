@@ -126,8 +126,16 @@ class PermissionGate:
 
     # -------------------------------------------------------------- approval
     def approve(self, category: str, prompt: str, detail: dict[str, Any] | None = None,
-                source: str = "text", timeout: float | None = None) -> bool:
-        """Return True only on a live manual approval from the operator."""
+                source: str = "text", timeout: float | None = None,
+                override_disarm: bool = False) -> bool:
+        """Return True only on a live manual approval from the operator.
+
+        ``override_disarm`` exists for exactly one caller: the Overseer asking
+        the operator whether it may repair the fault that caused the disarm.
+        It does NOT re-arm Jarvis - every other Jarvis request still fails
+        while the master switch is down. Without it the Overseer would be
+        locked out of fixing the very incident it raised.
+        """
         detail = dict(detail or {})
         detail["prompt"] = prompt
 
@@ -138,7 +146,7 @@ class PermissionGate:
 
         with self._lock:
             armed = self._armed
-        if not armed:
+        if not armed and not override_disarm:
             self._log("permission", f"gate:{category}", DECISION_REFUSED,
                       {**detail, "source": source,
                        "reason": "master switch disarmed by Overseer"})
