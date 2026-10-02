@@ -1,6 +1,6 @@
 {
   "current": "local",
-  "saved_at": 1790918837.1361184,
+  "saved_at": 1790919144.6582088,
   "devices": [
     {
       "id": "local",
@@ -20,7 +20,7 @@
       "kind": "host",
       "endpoint": "http://192.168.1.9:8770",
       "os": "Windows 11",
-      "granted_at": 1790918837.135122,
+      "granted_at": 1790919144.6572077,
       "last_seen": null,
       "trusted": true,
       "status": "local",

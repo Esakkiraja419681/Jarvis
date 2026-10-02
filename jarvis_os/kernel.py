@@ -176,8 +176,13 @@ class JarvisKernel:
         except Exception:  # noqa: BLE001
             return local_embed(text)
 
-    def _apply_overseer_control(self) -> None:
-        """Honour isolation instructions the Overseer left for this boot."""
+    def _apply_overseer_control(self, include_gate: bool = True) -> None:
+        """Honour isolation instructions the Overseer left for this boot.
+
+        ``include_gate`` is False when the Overseer's own restart callback runs:
+        the restart already remediated the halt, so the permission gate must come
+        back up. Boot passes True so an unresolved incident still halts Jarvis.
+        """
         path = self.config.resolve("data/overseer_control.json")
         if not path.is_file():
             return
@@ -187,9 +192,12 @@ class JarvisKernel:
             return
         applied: list[str] = []
         if control.get("gate_disarm"):
-            self.gate.disarm(f"overseer isolation after incident "
-                             f"{control.get('last_incident', '?')}")
-            applied.append("gate_disarm")
+            if include_gate:
+                self.gate.disarm(f"overseer isolation after incident "
+                                 f"{control.get('last_incident', '?')}")
+                applied.append("gate_disarm")
+            else:
+                applied.append("gate_rearmed_after_restart")
         if control.get("sandbox_enabled") is False:
             self.config.set("features.sandbox", False)
             applied.append("sandbox_disabled")
@@ -495,13 +503,20 @@ class JarvisKernel:
         return self.overseer.status()
 
     def _overseer_restart(self) -> None:
-        """Overseer asked for a restart: apply its isolation, then keep looping."""
+        """Overseer asked for a restart: re-apply isolation, then keep looping.
+
+        A successful restart IS the remediation for the halt, so the permission
+        gate is re-armed here. Layer-specific isolation (sandbox off, planner
+        off, loop throttling) is re-applied and stays until the Overseer or the
+        operator clears it.
+        """
         self.audit.record("kernel", "overseer_restart", "ok", {"cycles": self.cycles})
         self.consecutive_errors = 0
         self.cycles = 0
+        self.last_goal = None
         if self.gate and not self.gate.armed:
             self.gate.arm()
-        self._apply_overseer_control()
+        self._apply_overseer_control(include_gate=False)
 
     # ------------------------------------------------------------------ voice
     def set_voice(self, state: str) -> str:
