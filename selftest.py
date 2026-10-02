@@ -202,8 +202,8 @@ def main() -> int:
     check("ungated overseer refuses to rewrite source",
           ungated.repair_attempts == 0, f"attempts={ungated.repair_attempts}")
     check("ungated refusal is audited",
-          any(e["action"].startswith("repair:skipped")
-              for e in kernel.audit.tail(limit=40)))
+          any(e["action"] == "repair" and e["decision"] == "skipped"
+              for e in kernel.audit.tail(limit=60)))
 
     print("\n== task manager ==")
     tasks, strategy = kernel.task_manager.decompose("research the weather and write a script")
