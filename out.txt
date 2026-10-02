@@ -1,0 +1,132 @@
+
+== memory ==
+  [PASS] recall finds memory
+  [PASS] hash chains intact
+  [PASS] vector store populated
+  [PASS] purge refused without manual token
+  [PASS] memory survives refusal
+
+== permission gate ==
+
+[PERMISSION] Sir, manual approval required for 'self_learn'. test
+  type yes/allow (or no/deny) ->   [PASS] approve word accepted
+
+[PERMISSION] Sir, manual approval required for 'self_evolution'. test
+  type yes/allow (or no/deny) ->   [PASS] deny word refused
+
+[PERMISSION] Sir, manual approval required for 'skill_add'. test
+  type yes/allow (or no/deny) ->   [PASS] garbage refused
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. t
+  type yes/allow (or no/deny) ->   [PASS] voice approve accepted
+
+[PERMISSION] Sir, manual approval required for 'external_ai'. t
+  type yes/allow (or no/deny) ->   [PASS] voice deny refused
+  [PASS] mandatory category cannot be auto-allowed
+  [PASS] external AI needs live approval
+  [PASS] non-local host refused
+
+== audit ==
+  [PASS] audit chain verifies
+  [PASS] permission decisions logged
+
+== sandbox ==
+  [PASS] sandbox runs code
+  [PASS] sandbox blocks socket import
+  [PASS] sandbox enforces timeout
+  [PASS] shell rejects metacharacters
+  [PASS] shell allows python
+
+== tools ==
+  [PASS] file_write
+  [PASS] file_read
+  [PASS] path escape blocked
+  [PASS] shell tool executes
+  [PASS] external AI host refused by web_fetch
+
+== dynamic registration ==
+  [PASS] invalid tool name rejected
+  [PASS] runtime tool registered
+  [PASS] runtime tool callable
+  [PASS] default team present
+
+== language layer ==
+  [PASS] Tamil detected
+  [PASS] Tamil name resolved
+  [PASS] English detected
+  [PASS] Tamil script detected via detection()
+  [PASS] responses honorific-prefixed
+  [PASS] honorific not doubled
+
+== software factory ==
+
+[PERMISSION] Sir, manual approval required for 'software_install'. Jarvis requests permission to generate and install new software.
+  spec: hello world greeting program
+  type yes/allow (or no/deny) ->   [PASS] software built
+
+[PERMISSION] Sir, manual approval required for 'software_install'. Install and register 'hello_sir' (sw_684c101c)?
+  type yes/allow (or no/deny) ->   [PASS] software installed
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to start software 'sw_684c101c'.
+  type yes/allow (or no/deny) ->   [PASS] software launched
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to status software 'sw_684c101c'.
+  type yes/allow (or no/deny) ->   [PASS] software status reachable
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to logs software 'sw_684c101c'.
+  type yes/allow (or no/deny) ->   [PASS] software logs captured
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to stop software 'sw_684c101c'.
+  type yes/allow (or no/deny) ->   [PASS] registry tracks program
+
+== self update ==
+  [PASS] git repo initialised
+  [PASS] memory protected in gitignore
+  [PASS] memory not tracked by git
+  [PASS] snapshot taken
+
+== evolution engine ==
+  [PASS] propose phase enabled
+  [PASS] dry-run does not request approval
+  [PASS] apply phase toggled off
+
+== overseer ==
+  [PASS] runaway detected
+  [PASS] hallucination detected
+  [PASS] error storm detected
+  [PASS] incident recorded
+  [PASS] cross-layer trace produced
+  [PASS] overseer logged to shared ledger
+
+== task manager ==
+  [PASS] decomposition produces subtasks
+  [PASS] final task depends on others
+  [PASS] agent routing by keyword
+
+== devices & daemon ==
+  [PASS] local device registered
+  [PASS] device registry persisted
+  [PASS] remote config brake engaged
+  [PASS] daemon status available
+
+== control bridge ==
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to start software 'smoke_proc'.
+  type yes/allow (or no/deny) ->   [PASS] process started via bridge
+  [PASS] process reported alive
+  [PASS] unknown action rejected
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to stop software 'smoke_proc'.
+  type yes/allow (or no/deny) -> 
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to configure software 'smoke_proc'.
+  type yes/allow (or no/deny) ->   [PASS] configure writes env file
+
+== memory durability across restart ==
+  [PASS] memories survived close/reopen
+  [PASS] lessons survived close/reopen
+  [PASS] integrity holds after reopen
+  [PASS] boot count increments
+
+==============================================================
+  PASSED: 69    FAILED: 0
+==============================================================
