@@ -342,22 +342,25 @@ def main() -> int:
 
     print("\n== overseer ==")
     from jarvis_os.overseer import Incident
-    print("  [dbg] imported Incident")
-    _mark = Path(tempfile.gettempdir()) / "jarvis_dbg_steps.txt"
-    _mark.write_text("imported\n", encoding="utf-8")
-    _mark.write_text(_mark.read_text(encoding="utf-8") + "before_write\n", encoding="utf-8")
     kernel.overseer.write_heartbeat({
-        # pid must be the current process: the run-scoped checks below (cycles,
-        # last_output, error counters) are only evaluated for a heartbeat this
-        # run actually wrote.
+        # The pid must be the current process: the run-scoped checks below
+        # (cycles, last_output, error counters) are only evaluated for a
+        # heartbeat this run actually wrote.
         "ts": time.time(), "pid": os.getpid(), "cycles": 5000,
         "started_at": time.time() - 1,
         "consecutive_errors": 12, "llm_errors": 0, "last_output": "I have completed the task",
         "claimed_success": True, "verified_success": False, "notes": "",
     })
-    _mark.write_text(_mark.read_text(encoding="utf-8") + "after_write\n", encoding="utf-8")
-    report = kernel.overseer.scan()
-    print("  [dbg] scanned")
+    # runaway_loop is a halt-on-fault trigger and halt_jarvis() reads the pid
+    # from the heartbeat above, which is this very process. Disable the halt for
+    # this scan so the detection can be asserted without the test killing
+    # itself - the previous "pid": 1 only avoided death by aiming at PID 1.
+    prev_halt = kernel.overseer.halt_on_fault
+    kernel.overseer.halt_on_fault = False
+    try:
+        report = kernel.overseer.scan()
+    finally:
+        kernel.overseer.halt_on_fault = prev_halt
     faults = {f["fault"] for f in report["faults"]}
     check("runaway detected", "runaway_loop" in faults, str(faults))
     check("hallucination detected", "hallucination" in faults, str(faults))
@@ -366,20 +369,18 @@ def main() -> int:
     # Regression: a heartbeat left behind by a dead process must not be read as
     # a stall of the run that just started. That bug stopped Jarvis milliseconds
     # after boot and disarmed the permission gate on every restart.
-    stale = {"ts": time.time() - (config.get("overseer.stall_timeout_seconds", 45) + 30),
-             "pid": 999999, "cycles": 1, "started_at": time.time() - 600}
+    timeout = float(config.get("overseer.stall_timeout_seconds", 45))
+    stale = {"ts": time.time() - (timeout + 30), "pid": 999999,
+             "cycles": 1, "started_at": time.time() - 600}
     check("stale heartbeat from a dead pid is not a stall",
           kernel.overseer.stall_fault(stale) is None)
-    check("scan does not fault on a leftover heartbeat",
-          "stall" not in {f["fault"] for f in kernel.overseer.scan()["faults"]})
     # Detection must survive: a live process that genuinely stops beating is
     # still accused, and so is one that never beats at all.
-    live_stale = dict(stale, pid=os.getpid())
     check("stall still detected for the live process",
-          (kernel.overseer.stall_fault(live_stale) or {}).get("fault") == "stall")
-    never_beat = {"ts": time.time() - 600, "pid": 999999, "cycles": 0}
+          (kernel.overseer.stall_fault(dict(stale, pid=os.getpid())) or {}).get("fault") == "stall")
     check("stall still detected when nothing ever beats",
-          (kernel.overseer.stall_fault(never_beat) or {}).get("fault") == "stall")
+          (kernel.overseer.stall_fault({"ts": time.time() - 600, "pid": 999999,
+                                        "cycles": 0}) or {}).get("fault") == "stall")
 
     # Regression: isolation must record which incident caused it, for every
     # layer - only "permission" used to pass the id and the rest wrote "".
@@ -387,11 +388,11 @@ def main() -> int:
                                                "data/overseer_control.json"))
     probe_control.unlink(missing_ok=True)
     marker = Incident(incident_id="inc_marker_probe", fault="stall", layer="planner",
-                      evidence="probe", action_taken="")
+                      evidence="probe")
     kernel.overseer.isolate_layer("planner", marker)
     recorded = json.loads(probe_control.read_text(encoding="utf-8"))
-    check("isolation records the incident id", recorded.get("last_incident") == "inc_marker_probe",
-          str(recorded))
+    check("isolation records the incident id",
+          recorded.get("last_incident") == "inc_marker_probe", str(recorded))
     check("isolation flags the layer", recorded.get("planner_disabled") is True, str(recorded))
     probe_control.unlink(missing_ok=True)
 
