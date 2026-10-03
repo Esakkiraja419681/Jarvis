@@ -130,7 +130,10 @@ def main() -> int:
     answers = iter(["yes", "no", "yolo", "approve", "deny"])
     # Use a private gate instance with no Overseer thread attached, so the
     # answer sequence cannot be perturbed by background watchdog prompts.
-    pgate = PermissionGate(config, text_input=None)
+    # It shares the kernel's ledger so these decisions are auditable, which is
+    # what makes the "permission decisions logged" check meaningful on a clean
+    # install rather than only after enough history has accumulated.
+    pgate = PermissionGate(config, audit=kernel.audit, text_input=None)
     pgate._text_input = lambda prompt: next(answers, "")
     check("approve word accepted", pgate.approve("self_learn", "test", source="test"))
     check("deny word refused", not pgate.approve("self_evolution", "test", source="test"))
@@ -177,8 +180,8 @@ def main() -> int:
         "from jarvis_os.config import Config\n"
         "from jarvis_os.audit import AuditLedger\n"
         f"c = Config(path={str(config.path)!r}, root={str(config.root)!r})\n"
-        "a = AuditLedger(c.resolve('data/audit.db'),"
-        " c.resolve('data/audit_ledger.jsonl')).connect()\n"
+        "a = AuditLedger(c.resolve('audit.sqlite_path'),"
+        " c.resolve('audit.ledger_path')).connect()\n"
         "for i in range(25):\n"
         "    a.record('selftest', 'concurrent_' + str(i), 'ok', {'n': i},"
         " actor='overseer')\n"
