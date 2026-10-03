@@ -162,7 +162,11 @@ class OverseerAgenticOS:
         tmp.replace(self.heartbeat_path)
 
     @staticmethod
-    def age(payload: dict[str, Any]) -> float:
+    def age(payload: dict[str, Any] | None) -> float:
+        # A missing heartbeat is as old as it gets; it must not raise, because
+        # the caller uses this to decide whether to accuse the system.
+        if not payload:
+            return 1e9
         try:
             return time.time() - float(payload.get("ts", 0))
         except (TypeError, ValueError):
