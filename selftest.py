@@ -6,11 +6,15 @@ Run:  python selftest.py
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+REPO_ROOT = Path(__file__).resolve().parent
 
 from jarvis_os.config import Config
 from jarvis_os.kernel import JarvisKernel
@@ -25,8 +29,70 @@ def check(name: str, condition: bool, detail: str = "") -> None:
     print(f"  [{mark}] {name}" + (f"  -- {detail}" if detail and not condition else ""))
 
 
+# Config keys that address persistent state. Every one is redirected into the
+# sandbox so a smoke run cannot mutate the operator's memory, lessons, audit
+# ledger, device registry, built software, or daemon control files.
+_DATA_PATHS = (
+    "memory.sqlite_path",
+    "memory.vector_path",
+    "memory.lesson_log",
+    "memory.action_log",
+    "audit.ledger_path",
+    "audit.sqlite_path",
+    "overseer.heartbeat_path",
+    "control_bridge.ipc_path",
+    "control_bridge.token_file",
+    "software_factory.build_root",
+    "software_factory.registry_path",
+    "devices.registry_path",
+    "language.cache_dir",
+    "skills.path",
+    "loop.stop_file",
+    "loop.pause_file",
+    "sandbox.workdir",
+)
+
+
+def sandbox_config(root: Path, live: Path) -> Config:
+    """Build a Config whose persistent state is redirected into ``root``.
+
+    The smoke test must never touch the operator's live state: setting a
+    feature flag persists to config.json, and every memory/lesson/audit write
+    lands in the real database. The live config is copied verbatim - so tuned
+    model, timing and honourific settings still apply - with only the data
+    paths repointed at a throwaway directory.
+    """
+    raw = {}
+    if live.is_file():
+        try:
+            raw = json.loads(live.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    for dotted in _DATA_PATHS:
+        node = raw
+        parts = dotted.split(".")
+        for part in parts[:-1]:
+            node = node.get(part)
+            if not isinstance(node, dict):
+                node = None
+                break
+        if isinstance(node, dict) and isinstance(node.get(parts[-1]), str):
+            node[parts[-1]] = str((root / "data" /
+                                  Path(node[parts[-1]]).name).as_posix())
+
+    (root / "data").mkdir(parents=True, exist_ok=True)
+    cfg = root / "config.json"
+    cfg.write_text(json.dumps(raw, indent=2, ensure_ascii=False), encoding="utf-8")
+    # root stays the repo so source-relative behaviour is unchanged.
+    return Config(path=cfg, root=live.parent)
+
+
 def main() -> int:
-    config = Config()
+    sandbox = Path(tempfile.mkdtemp(prefix="jarvis-selftest-"))
+    config = sandbox_config(sandbox, REPO_ROOT / "config.json")
     config.set_feature("overseer", False)
     config.set_feature("voice", False)
     config.set_feature("rest_api", False)
@@ -105,13 +171,12 @@ def main() -> int:
     # The Overseer is a SEPARATE process on the same ledger, so two live
     # writers must not fork the chain.
     import subprocess as _sp
-    import tempfile
     child_src = (
         "import sys\n"
         f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
         "from jarvis_os.config import Config\n"
         "from jarvis_os.audit import AuditLedger\n"
-        "c = Config()\n"
+        f"c = Config(path={str(config.path)!r}, root={str(config.root)!r})\n"
         "a = AuditLedger(c.resolve('data/audit.db'),"
         " c.resolve('data/audit_ledger.jsonl')).connect()\n"
         "for i in range(25):\n"
@@ -374,6 +439,7 @@ def main() -> int:
           not kernel.config.resolve("data/overseer_control.json").exists())
 
     kernel.shutdown()
+    shutil.rmtree(sandbox, ignore_errors=True)
     print(f"  PASSED: {len(PASS)}    FAILED: {len(FAIL)}")
     if FAIL:
         print("  failing: " + ", ".join(FAIL))

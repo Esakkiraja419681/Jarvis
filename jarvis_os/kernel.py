@@ -183,7 +183,7 @@ class JarvisKernel:
         the restart already remediated the halt, so the permission gate must come
         back up. Boot passes True so an unresolved incident still halts Jarvis.
         """
-        path = self.config.resolve("data/overseer_control.json")
+        path = self.config.resolve(self.config.get("overseer.control_file", "data/overseer_control.json"))
         if not path.is_file():
             return
         try:

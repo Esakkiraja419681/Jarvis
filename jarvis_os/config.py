@@ -97,6 +97,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     "overseer": {
         "heartbeat_path": "data/heartbeat.json",
+        "control_file": "data/overseer_control.json",
         "interval_seconds": 3,
         "stall_timeout_seconds": 45,
         "halt_on_fault": True,
@@ -272,6 +273,12 @@ class Config:
             value = self.get(dotted_or_path)
             if isinstance(value, str):
                 return (self.root / value).resolve()
+            # A known section was addressed but the leaf held no path (absent
+            # or wrong type). Falling through would scatter a file named after
+            # the dotted key into the repo root, which is how stale
+            # "devices.registry_path" style artefacts appear. Keep persistent
+            # state inside data/ instead.
+            return (self.root / "data" / p.name).resolve()
         return (self.root / dotted_or_path).resolve()
 
     def feature(self, name: str, default: bool = False) -> bool:

@@ -417,7 +417,8 @@ class OverseerAgenticOS:
 
     def _write_control(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Write an isolation instruction the kernel applies on restart."""
-        path = self.config.resolve("data/overseer_control.json")
+        path = self.config.resolve(
+            self.config.get("overseer.control_file", "data/overseer_control.json"))
         existing: dict[str, Any] = {}
         if path.is_file():
             try:
@@ -609,7 +610,8 @@ class OverseerAgenticOS:
         return {"content": content, "test_code": str(parsed.get("test_code", ""))}
 
     def _clear_control(self) -> None:
-        path = self.config.resolve("data/overseer_control.json")
+        path = self.config.resolve(
+            self.config.get("overseer.control_file", "data/overseer_control.json"))
         try:
             path.unlink(missing_ok=True)
         except OSError:
@@ -617,7 +619,8 @@ class OverseerAgenticOS:
 
     def clear_control(self) -> bool:
         """Public, operator-driven release of any active layer isolation."""
-        path = self.config.resolve("data/overseer_control.json")
+        path = self.config.resolve(
+            self.config.get("overseer.control_file", "data/overseer_control.json"))
         try:
             existed = path.is_file()
             path.unlink(missing_ok=True)
