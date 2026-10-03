@@ -308,6 +308,8 @@ def main() -> int:
 
     print("\n== software factory ==")
     build = kernel.software.build("hello world greeting program")
+    Path(tempfile.gettempdir(), "jarvis_build_dump.json").write_text(
+        json.dumps(build, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     check("software built", build.get("ok"), str(build)[:300])
     if build.get("ok"):
         pid = build["program"]["id"]
