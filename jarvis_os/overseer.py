@@ -318,7 +318,7 @@ class OverseerAgenticOS:
         """
         try:
             beat_pid = int(beat.get("pid") or 0)
-        except (TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError):
             return False
         supervised = self.supervised_pid()
         if not beat_pid or not supervised:
@@ -457,7 +457,7 @@ class OverseerAgenticOS:
 
     def halt_jarvis(self, reason: str = "overseer fault") -> bool:
         """Terminate the Jarvis process group immediately."""
-        beat = self.heartbeat()
+        beat = self.heartbeat() or {}
         pid = beat.get("pid") or self._jarvis_pid
         if not pid:
             return False
@@ -769,9 +769,8 @@ class OverseerAgenticOS:
 
     # ---------------------------------------------------------------- status
     def status(self) -> str:
-        beat = self.heartbeat()
+        beat = self.heartbeat() or {}
         alive = self.jarvis_alive()
-        age = self.age(beat) if beat else None
         lines = [
             "OverseerAgenticOS",
             f"  running        : {self.running}",
