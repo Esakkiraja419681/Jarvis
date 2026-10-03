@@ -343,6 +343,9 @@ def main() -> int:
     print("\n== overseer ==")
     from jarvis_os.overseer import Incident
     print("  [dbg] imported Incident")
+    _mark = Path(tempfile.gettempdir()) / "jarvis_dbg_steps.txt"
+    _mark.write_text("imported\n", encoding="utf-8")
+    _mark.write_text(_mark.read_text(encoding="utf-8") + "before_write\n", encoding="utf-8")
     kernel.overseer.write_heartbeat({
         # pid must be the current process: the run-scoped checks below (cycles,
         # last_output, error counters) are only evaluated for a heartbeat this
@@ -352,6 +355,7 @@ def main() -> int:
         "consecutive_errors": 12, "llm_errors": 0, "last_output": "I have completed the task",
         "claimed_success": True, "verified_success": False, "notes": "",
     })
+    _mark.write_text(_mark.read_text(encoding="utf-8") + "after_write\n", encoding="utf-8")
     report = kernel.overseer.scan()
     print("  [dbg] scanned")
     faults = {f["fault"] for f in report["faults"]}
