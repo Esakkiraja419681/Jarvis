@@ -17,6 +17,7 @@ with ``langdetect``/``langid`` if those happen to be present.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import threading
 from dataclasses import dataclass, field
@@ -108,29 +109,54 @@ class UniversalLanguageLayer:
         self._detect_backends()
 
     # ------------------------------------------------------------- backends
-    def _detect_backends(self) -> None:
-        wanted = str(self.config.get("language.backend", "auto"))
+    @staticmethod
+    def _module_present(name: str) -> bool:
+        """Is the module importable *without importing it*?
+
+        Importing ``transformers`` on a cold interpreter costs over a minute
+        because it drags in torch. Doing that inside the kernel constructor
+        stalls boot long enough for the watchdog to look like a hang, so
+        availability is probed through the import system instead.
+        """
         try:
-            import argostranslate.package as pkg
-            from argostranslate.translate import translate as argos_translate
-            from argostranslate import translate as _t
-            self._argos_translate = _t.translate
-            self._pkg = pkg
-            self._argos_installed = True
+            return importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            return False
+
+    def _detect_backends(self) -> None:
+        """Probe which offline backends exist. Never imports a heavy backend."""
+        wanted = str(self.config.get("language.backend", "auto"))
+        self._argos_installed = self._module_present("argostranslate")
+        self._pkg = None
+        self._argos_translate = None
+        if self._argos_installed:
             self.backend = "argos"
-        except Exception:  # noqa: BLE001 - Argos is optional
-            self._argos_installed = False
         if not self._argos_installed and wanted in ("auto", "nllb"):
-            try:
-                from transformers import AutoModelForSeq2SeqLM, AutoTokenizer  # noqa: F401
+            if self._module_present("transformers"):
                 self.backend = "nllb"
-            except Exception:  # noqa: BLE001
+            else:
                 self.backend = "none"
+
+    def _ensure_argos(self) -> bool:
+        """Import Argos on first real use and cache the module handles."""
+        if not self._argos_installed:
+            return False
+        if self._pkg is None:
+            try:
+                import argostranslate.package as pkg
+                from argostranslate import translate as _t
+
+                self._pkg = pkg
+                self._argos_translate = _t.translate
+            except Exception:  # noqa: BLE001 - Argos is optional
+                self._argos_installed = False
+                return False
+        return True
 
     def _installed_argos_pairs(self) -> set[tuple[str, str]]:
         """Language pairs already present on disk. Never touches the network."""
         pairs: set[tuple[str, str]] = set()
-        if not self._argos_installed:
+        if not self._ensure_argos():
             return pairs
         try:
             for pkg_item in self._pkg.get_installed_packages():
@@ -146,7 +172,7 @@ class UniversalLanguageLayer:
         and it refuses to run unless the operator explicitly approved *this*
         call. Jarvis will not silently fetch anything at boot.
         """
-        if not self._argos_installed:
+        if not self._ensure_argos():
             return {"ok": False, "error": "argostranslate is not installed"}
         if not approved:
             return {"ok": False, "error":
@@ -260,7 +286,7 @@ class UniversalLanguageLayer:
                 return self._cache[key]
 
         translated: str | None = None
-        if self._argos_installed:
+        if self._ensure_argos():
             try:
                 translated = self._argos_translate(text, detection.language, target)
             except Exception as exc:  # noqa: BLE001
