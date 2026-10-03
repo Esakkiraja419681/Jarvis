@@ -112,6 +112,8 @@ class OverseerAgenticOS:
         self.repair_attempts = 0
         self._counter = 0
         self._jarvis_pid: int | None = None
+        self._observed_pid: int | None = None
+        self._started_at: float = time.time()
         self._restart_cb: Callable[[], Any] | None = None
         self._lock = threading.RLock()
         self.last_scan: dict[str, Any] = {}
@@ -277,6 +279,28 @@ class OverseerAgenticOS:
         return findings[:10]
 
     # ------------------------------------------------------------------ scan
+    def supervised_pid(self) -> int:
+        """PID of the process this Overseer is accountable for.
+
+        In-process (Jarvis supervising itself) that is this process. As a
+        separate watchdog process it is the Jarvis run being watched, which is
+        learned from the first heartbeat it sees that was not written by the
+        watchdog itself. Falling back to ``os.getpid()`` there would compare the
+        watchdog against itself and never match.
+        """
+        return self._jarvis_pid or self._observed_pid or os.getpid()
+
+    def adopt_observed_pid(self, beat: dict[str, Any]) -> None:
+        """Remember which foreign run is the one we are supervising."""
+        if self._jarvis_pid is not None or self._observed_pid is not None or not beat:
+            return
+        try:
+            pid = int(beat.get("pid") or 0)
+        except (TypeError, ValueError):
+            return
+        if pid and pid != os.getpid():
+            self._observed_pid = pid
+
     def heartbeat_is_current(self, beat: dict[str, Any]) -> bool:
         """Does this heartbeat belong to the run being supervised?
 
@@ -290,7 +314,7 @@ class OverseerAgenticOS:
             beat_pid = int(beat.get("pid") or 0)
         except (TypeError, ValueError):
             return False
-        supervised = self._jarvis_pid or os.getpid()
+        supervised = self.supervised_pid()
         if not beat_pid or not supervised:
             return True
         return beat_pid == int(supervised)
@@ -305,26 +329,31 @@ class OverseerAgenticOS:
           expected during the boot window before the first beat is written.
 
         Judging the second by the first stops the system within milliseconds of
-        startup and disarms the permission gate, so a foreign heartbeat gets a
-        grace period instead of an immediate accusation.
+        startup and disarms the permission gate. PID identity - not age - is the
+        discriminator: a heartbeat written by a different process is never proof
+        that *this* process stopped beating, no matter how old it is. Age only
+        matters for heartbeats the supervised process actually wrote.
         """
         age = self.age(beat)
         if age <= self.stall_timeout:
             return None
-        cycles = beat.get('cycles')
+        cycles = (beat or {}).get("cycles")
         if self.heartbeat_is_current(beat):
             return {"fault": "stall", "layer": "planner",
                     "evidence": f"heartbeat is {age:.1f}s old "
                                 f"(timeout {self.stall_timeout}s); cycles={cycles}"}
-        if age <= self.stall_timeout * 3:
+
+        boot_window = max(self.stall_timeout * 3, 60.0)
+        if time.time() - self._started_at <= boot_window:
             return None
         return {"fault": "stall", "layer": "planner",
-                "evidence": f"heartbeat is {age:.1f}s old and was not written by "
-                            f"the supervised process (pid {os.getpid()}); "
-                            f"cycles={cycles}"}
+                "evidence": f"supervised process (pid {self.supervised_pid()}) never "
+                            f"wrote a heartbeat; last file was from pid "
+                            f"{(beat or {}).get('pid')} {age:.1f}s ago; cycles={cycles}"}
 
     def scan(self) -> dict[str, Any]:
         beat = self.heartbeat()
+        self.adopt_observed_pid(beat)
         faults: list[dict[str, Any]] = []
         if not beat:
             faults.append({"fault": "no_heartbeat", "layer": "interface",

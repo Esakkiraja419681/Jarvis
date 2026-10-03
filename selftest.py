@@ -361,7 +361,7 @@ def main() -> int:
     kernel.config.set_phase("apply", True)
 
     print("\n== overseer ==")
-    from jarvis_os.overseer import Incident
+    from jarvis_os.overseer import Incident, OverseerAgenticOS
     kernel.overseer.write_heartbeat({
         # The pid must be the current process: the run-scoped checks below
         # (cycles, last_output, error counters) are only evaluated for a
@@ -394,13 +394,38 @@ def main() -> int:
              "cycles": 1, "started_at": time.time() - 600}
     check("stale heartbeat from a dead pid is not a stall",
           kernel.overseer.stall_fault(stale) is None)
+    # The exact production failure: a leftover hours old from a dead run must
+    # never accuse the fresh process, however far past the timeout it is.
+    check("an ancient leftover from a dead run is not a stall",
+          kernel.overseer.stall_fault({"ts": time.time() - 9000, "pid": 999999,
+                                       "cycles": 1}) is None)
     # Detection must survive: a live process that genuinely stops beating is
-    # still accused, and so is one that never beats at all.
+    # still accused.
     check("stall still detected for the live process",
           (kernel.overseer.stall_fault(dict(stale, pid=os.getpid())) or {}).get("fault") == "stall")
+    # And once the boot window has elapsed, a supervised process that never
+    # beats at all is still accused.
+    kernel.overseer._started_at = time.time() - (10 * timeout)
+    try:
+        never = kernel.overseer.stall_fault({"ts": time.time() - 600, "pid": 999999,
+                                             "cycles": 0})
+    finally:
+        kernel.overseer._started_at = time.time()
     check("stall still detected when nothing ever beats",
-          (kernel.overseer.stall_fault({"ts": time.time() - 600, "pid": 999999,
-                                        "cycles": 0}) or {}).get("fault") == "stall")
+          (never or {}).get("fault") == "stall", str(never))
+
+    # As a separate watchdog process the Overseer must learn which run it is
+    # watching. Comparing against its own pid would never match, and every
+    # heartbeat would look foreign.
+    watchdog = OverseerAgenticOS(config)
+    foreign = {"ts": time.time(), "pid": 424242, "cycles": 1}
+    watchdog.adopt_observed_pid(foreign)
+    check("watchdog adopts the supervised pid",
+          watchdog.supervised_pid() == 424242, str(watchdog.supervised_pid()))
+    check("watchdog recognises the run it watches",
+          watchdog.heartbeat_is_current(foreign) is True)
+    check("watchdog still rejects a foreign heartbeat",
+          watchdog.heartbeat_is_current(dict(foreign, pid=515151)) is False)
 
     # Regression: isolation must record which incident caused it, for every
     # layer - only "permission" used to pass the id and the rest wrote "".
