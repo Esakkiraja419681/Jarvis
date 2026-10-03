@@ -265,20 +265,22 @@ class Config:
 
     # --------------------------------------------------------------- helpers
     def resolve(self, dotted_or_path: str) -> Path:
+        """Turn a config key or a relative path into an absolute path.
+
+        Accepts either a dotted config key ("audit.sqlite_path") or a literal
+        relative path ("data/audit.db"). A key whose leaf holds no string used
+        to fall through and materialise a file named after the dotted key in
+        the repo root; persistent state now stays under data/.
+        """
         candidate = Path(dotted_or_path)
         if candidate.is_absolute():
             return candidate
-        p = Path(dotted_or_path)
-        if p.parts and p.parts[0] in self._data:
+        head, _, _ = dotted_or_path.partition(".")
+        if head and head != dotted_or_path and head in self._data:
             value = self.get(dotted_or_path)
             if isinstance(value, str):
                 return (self.root / value).resolve()
-            # A known section was addressed but the leaf held no path (absent
-            # or wrong type). Falling through would scatter a file named after
-            # the dotted key into the repo root, which is how stale
-            # "devices.registry_path" style artefacts appear. Keep persistent
-            # state inside data/ instead.
-            return (self.root / "data" / p.name).resolve()
+            return (self.root / "data" / dotted_or_path.rpartition(".")[2]).resolve()
         return (self.root / dotted_or_path).resolve()
 
     def feature(self, name: str, default: bool = False) -> bool:
