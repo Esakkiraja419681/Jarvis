@@ -126,7 +126,7 @@ def live_fingerprint() -> dict[str, str]:
 
 
 def main() -> int:
-    before = live_fingerprint()
+    live_before = live_fingerprint()
     sandbox = Path(tempfile.mkdtemp(prefix="jarvis-selftest-"))
     config = sandbox_config(sandbox, REPO_ROOT / "config.json")
     config.set_feature("overseer", False)
@@ -486,8 +486,8 @@ def main() -> int:
     shutil.rmtree(sandbox, ignore_errors=True)
     shutil.rmtree(REPO_ROOT / "data" / ".selftest_scratch", ignore_errors=True)
     after = live_fingerprint()
-    drifted = sorted(k for k in set(before) | set(after)
-                     if before.get(k) != after.get(k))
+    drifted = sorted(k for k in set(live_before) | set(after)
+                     if live_before.get(k) != after.get(k))
     check("live state untouched by selftest", not drifted, ", ".join(drifted))
     print(f"  PASSED: {len(PASS)}    FAILED: {len(FAIL)}")
     if FAIL:
