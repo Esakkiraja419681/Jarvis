@@ -148,12 +148,17 @@ class OverseerAgenticOS:
 
     # ------------------------------------------------------------- heartbeat
     def heartbeat(self) -> dict[str, Any]:
+        # A heartbeat is written by another process, so it is untrusted input:
+        # missing, truncated, or valid-JSON-but-not-an-object (null, list, str).
+        # Every caller assumes a mapping, so enforce that here once instead of
+        # defending at each call site.
         if not self.heartbeat_path.is_file():
             return {}
         try:
-            return json.loads(self.heartbeat_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            payload = json.loads(self.heartbeat_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
             return {}
+        return payload if isinstance(payload, dict) else {}
 
     def write_heartbeat(self, payload: dict[str, Any]) -> None:
         self.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
