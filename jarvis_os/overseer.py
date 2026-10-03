@@ -160,6 +160,18 @@ class OverseerAgenticOS:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def beat(self) -> dict[str, Any]:
+        """Heartbeat as a guaranteed mapping.
+
+        heartbeat() is a public seam: it reads a file written by another process
+        and can also be substituted (tests, recovery paths) with something that
+        returns None. Callers all assume a mapping, so normalise once here rather
+        than repeating `or {}` at each site and letting one omission crash the
+        watchdog - which is exactly the layer that must never raise.
+        """
+        payload = self.heartbeat()
+        return payload if isinstance(payload, dict) else {}
+
     def write_heartbeat(self, payload: dict[str, Any]) -> None:
         self.heartbeat_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.heartbeat_path.with_suffix(".tmp")
@@ -181,7 +193,7 @@ class OverseerAgenticOS:
         # The file can be missing, truncated or mid-write; asking the OS about
         # a pid is the only trustworthy liveness signal, and a missing file must
         # not raise here or the Overseer loses its only watchdog.
-        beat = self.heartbeat() or {}
+        beat = self.beat()
         pid = beat.get("pid") or self._jarvis_pid
         if not pid:
             return False
@@ -278,7 +290,7 @@ class OverseerAgenticOS:
 
     def check_llm_health(self) -> list[str]:
         findings: list[str] = []
-        beat = self.heartbeat()
+        beat = self.beat()
         if beat.get("llm_errors", 0) >= 10:
             findings.append(f"llm layer: {beat['llm_errors']} recent LLM failures")
         provider = str(self.config.get("llm.provider", "ollama"))
@@ -363,7 +375,7 @@ class OverseerAgenticOS:
         return None
 
     def scan(self) -> dict[str, Any]:
-        beat = self.heartbeat()
+        beat = self.beat()
         self.adopt_observed_pid(beat)
         faults: list[dict[str, Any]] = []
         if not beat:
@@ -462,7 +474,7 @@ class OverseerAgenticOS:
 
     def halt_jarvis(self, reason: str = "overseer fault") -> bool:
         """Terminate the Jarvis process group immediately."""
-        beat = self.heartbeat() or {}
+        beat = self.beat()
         pid = beat.get("pid") or self._jarvis_pid
         if not pid:
             return False
@@ -559,7 +571,7 @@ class OverseerAgenticOS:
     def _cross_layer_trace(self, fault: str, layer: str) -> dict[str, Any]:
         """Walk every layer and record its health, so the fault is not misfiled."""
         trace: dict[str, Any] = {}
-        beat = self.heartbeat()
+        beat = self.beat()
         for name in LAYERS:
             if name == layer:
                 trace[name] = "FAULT"
@@ -774,7 +786,7 @@ class OverseerAgenticOS:
 
     # ---------------------------------------------------------------- status
     def status(self) -> str:
-        beat = self.heartbeat() or {}
+        beat = self.beat()
         alive = self.jarvis_alive()
         lines = [
             "OverseerAgenticOS",
