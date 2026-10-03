@@ -1,7 +1,0 @@
-{
-  "ok": true,
-  "name": "hello_sir",
-  "summary": "Hello program for: hello world greeting program",
-  "notes": "Generated locally as a template; ask for a richer build.",
-  "code": "\"\"\"Hello, Sir.\"\"\"\n\n\nSPEC = 'hello world greeting program'\n\n\ndef main() -> int:\n    print(f\"Hello, Sir. Working on: {SPEC}\")\n    return 0\n\n\nif __name__ == \"__main__\":\n    raise SystemExit(main())\n"
-}
