@@ -342,6 +342,7 @@ def main() -> int:
 
     print("\n== overseer ==")
     from jarvis_os.overseer import Incident
+    print("  [dbg] imported Incident")
     kernel.overseer.write_heartbeat({
         # pid must be the current process: the run-scoped checks below (cycles,
         # last_output, error counters) are only evaluated for a heartbeat this
@@ -352,6 +353,7 @@ def main() -> int:
         "claimed_success": True, "verified_success": False, "notes": "",
     })
     report = kernel.overseer.scan()
+    print("  [dbg] scanned")
     faults = {f["fault"] for f in report["faults"]}
     check("runaway detected", "runaway_loop" in faults, str(faults))
     check("hallucination detected", "hallucination" in faults, str(faults))
