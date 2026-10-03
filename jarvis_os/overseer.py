@@ -169,7 +169,10 @@ class OverseerAgenticOS:
             return 1e9
 
     def jarvis_alive(self) -> bool:
-        beat = self.heartbeat()
+        # The file can be missing, truncated or mid-write; asking the OS about
+        # a pid is the only trustworthy liveness signal, and a missing file must
+        # not raise here or the Overseer loses its only watchdog.
+        beat = self.heartbeat() or {}
         pid = beat.get("pid") or self._jarvis_pid
         if not pid:
             return False
