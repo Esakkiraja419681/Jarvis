@@ -174,6 +174,35 @@ class SoftwareFactory:
         program_name = name or str(generated.get("name") or f"program_{program_id[-4:]}")
         program_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", program_name).strip("_").lower() or program_id
         folder = self.root / program_id
+        program = Program(
+            program_id=program_id, name=program_name,
+            summary=str(generated.get("summary", ""))[:300], spec=spec,
+            language=language, entry=entry, path=str(folder),
+            notes=str(generated.get("notes", ""))[:500],
+        )
+        program.test = self._verify(program, code)
+
+        # A small local model can emit perfectly parseable code that does not
+        # actually run. The operator asked for a runnable artifact, not a
+        # perfect one, so degrade to the deterministic template instead of
+        # failing the whole build - and say so in the notes.
+        if not program.test.get("ok"):
+            fallback = self._fallback_program(spec, entry)
+            if fallback and str(fallback.get("code")) != code:
+                self._log("build", "verify_failed", {
+                    "program": program_id, "stage": program.test.get("stage"),
+                    "error": str(program.test.get("stderr", ""))[:200],
+                    "action": "fell back to the deterministic template",
+                })
+                generated = fallback
+                code = str(fallback["code"])
+                program.summary = str(fallback.get("summary", ""))[:300]
+                program.notes = (
+                    "Local model output failed sandbox verification; used the "
+                    "deterministic template instead. " + str(fallback.get("notes", ""))
+                )[:500]
+                program.test = self._verify(program, code)
+
         folder.mkdir(parents=True, exist_ok=True)
         target = folder / entry
         target.write_text(code, encoding="utf-8")
@@ -182,18 +211,9 @@ class SoftwareFactory:
         (folder / "BUILD.json").write_text(
             json.dumps(generated, indent=2, ensure_ascii=False)[:8000], encoding="utf-8")
 
-        program = Program(
-            program_id=program_id, name=program_name,
-            summary=str(generated.get("summary", ""))[:300], spec=spec,
-            language=language, entry=entry, path=str(folder),
-            notes=str(generated.get("notes", ""))[:500],
-        )
-        program.test = self._verify(program, code)
         if not program.test.get("ok"):
             program.status = "failed_verification"
             self.registry.add(program)
-            self._log("build", "verify_failed", {"program": program_id,
-                                                  "error": program.test.get("stderr", "")[:200]})
             return {"ok": False, "error": "generated code failed sandbox verification",
                     "program": program.to_dict(), "test": program.test}
 

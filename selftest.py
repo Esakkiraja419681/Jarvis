@@ -308,8 +308,6 @@ def main() -> int:
 
     print("\n== software factory ==")
     build = kernel.software.build("hello world greeting program")
-    Path(tempfile.gettempdir(), "jarvis_build_dump.json").write_text(
-        json.dumps(build, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     check("software built", build.get("ok"), str(build)[:300])
     if build.get("ok"):
         pid = build["program"]["id"]
@@ -324,6 +322,26 @@ def main() -> int:
         check("software logs captured", logs.get("ok") and isinstance(logs.get("logs"), list))
         kernel.software.control(pid, "stop")
         check("registry tracks program", kernel.software.registry.get(pid) is not None)
+
+    # A small local model can return parseable code that does not run. The
+    # build must still yield a runnable artifact instead of failing outright.
+    original_ask = kernel.software.llm.ask_json
+    kernel.software.llm.ask_json = lambda prompt, persona=None: {
+        "name": "hello_sir", "summary": "LLM claimed success", "notes": "model output",
+        "entry": "main.py",
+        "code": "def main():\n    print(undefined_name_boom)\n\nmain()\n",
+    }
+    try:
+        rescued = kernel.software.build("hello world greeting program")
+    finally:
+        kernel.software.llm.ask_json = original_ask
+    rprog = rescued.get("program") or {}
+    check("unrunnable model output still yields a runnable build", rescued.get("ok") is True,
+          str(rescued)[:200])
+    check("rescued build says it degraded",
+          "failed sandbox verification" in (rprog.get("notes") or ""), str(rprog.get("notes")))
+    check("rescued build actually executes",
+          (rprog.get("test") or {}).get("returncode") == 0, str(rprog.get("test")))
 
     print("\n== self update ==")
     check("git repo initialised", kernel.self_update.is_repo())
