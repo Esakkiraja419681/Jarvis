@@ -99,7 +99,10 @@ class UniversalLanguageLayer:
         self.llm = llm
         self.audit = audit
         self.target = str(config.get("language.target_language", "en"))
-        self.preferred = str(config.get("preferred_language", "ta"))
+        # Operator reply language. Read from the language section like every
+        # other key; an unnamespaced lookup silently fell back to the "ta"
+        # default, so config.json could never actually change it.
+        self.preferred = str(config.get("language.preferred_language", "ta"))
         self.honorific = config.honorific()
         self._lock = threading.RLock()
         self._argos_installed = False

@@ -21,8 +21,13 @@ pyttsx3>=2.90              # offline text-to-speech output
 
 # --- Local translation fallback (optional, heavy) ------------------------
 # Only needed if you want the neural offline translator instead of Argos.
-# transformers>=4.40
-# torch>=2.0
+# It is what serves Tamil: NLLB-200 covers `ta` natively, while Argos has no
+# en->ta package. ~2.4 GB of weights land in language.cache_dir (data/langcache)
+# and are never downloaded automatically -- Jarvis loads with
+# local_files_only=True, so fetch them explicitly first.
+transformers>=4.40
+sentencepiece>=0.1.99    # NLLB tokenizer
+torch>=2.0
 
 # NOTE: PyAudio is required by SpeechRecognition for microphone capture on most
 # systems, but it needs PortAudio binaries, so it is not listed here. Install it

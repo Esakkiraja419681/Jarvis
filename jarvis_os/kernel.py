@@ -105,8 +105,10 @@ class JarvisKernel:
             self.audit.record("memory", "boot_check", "ok",
                               {"stats": self.memory.integrity_report().get("stats", {})})
 
-        # --- interfaces & language ----------------------------------------
-        self.language = UniversalLanguageLayer(cfg, audit=self.audit)
+        # --- interfaces& language ----------------------------------------
+        # The interfaces receive the kernel and only reach for kernel.language
+        # once a command runs, so the layer itself is built after the LLM
+        # client below.
         self.text_iface = TextCommandInterface(self, cfg)
         self.voice_iface = VoiceCommandInterface(self, cfg)
 
@@ -123,6 +125,11 @@ class JarvisKernel:
         # --- llm (ollama only) ---------------------------------------------
         self.llm = LLMClient(cfg, gate=self.gate, audit=self.audit)
         self.memory.set_embedder(self._embed)
+
+        # --- language layer -------------------------------------------------
+        # Needs self.llm: without it the Ollama translation fallback can never
+        # activate and en->ta silently loses its last-resort backend.
+        self.language = UniversalLanguageLayer(cfg, llm=self.llm, audit=self.audit)
 
         # --- execution ------------------------------------------------------
         self.sandbox = PythonSandbox(cfg, gate=self.gate, audit=self.audit)
