@@ -1,0 +1,31 @@
+# Jarvis Agentic OS - runtime dependencies
+#
+# Everything here is optional in the sense that jarvis.py boots and runs the
+# full core without it; each package only enables one optional capability and
+# is imported lazily. Nothing in this list downloads a model on first boot.
+
+# --- Core (already present in most environments) -------------------------
+psutil>=5.9            # process supervision for the software factory / daemon
+
+# --- Language layer (optional) -------------------------------------------
+langdetect>=1.0.9      # script/language detection for the language layer
+argostranslate>=1.9    # OFFLINE translation. Requires language pairs to be
+                       # installed separately and explicitly:
+                       #     from jarvis_os.language import install_argos_packages
+                       #     install_argos_packages(approved=True)
+                       # Jarvis never calls this on its own.
+
+# --- Voice interface (optional) ------------------------------------------
+speech_recognition>=3.10   # offline speech-to-text (Sphinx/Whisper backend)
+pyttsx3>=2.90              # offline text-to-speech output
+
+# --- Local translation fallback (optional, heavy) ------------------------
+# Only needed if you want the neural offline translator instead of Argos.
+# transformers>=4.40
+# torch>=2.0
+
+# NOTE: PyAudio is required by SpeechRecognition for microphone capture on most
+# systems, but it needs PortAudio binaries, so it is not listed here. Install it
+# only if you enable voice:
+#     pip install pyaudio
+# Voice degrades gracefully to text when any of these are absent.

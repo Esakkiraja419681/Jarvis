@@ -159,7 +159,9 @@ class PermissionGate:
                   {**detail, "source": effective_source})
 
         try:
-            answer = (self._voice_input() if use_voice else self._text_input(prompt))
+            # _announce() already printed the full prompt; passing it again
+            # would echo the whole question twice.
+            answer = (self._voice_input() if use_voice else self._text_input(""))
         except (EOFError, KeyboardInterrupt):
             answer = ""
         except Exception as exc:  # noqa: BLE001 - gate must never crash the OS

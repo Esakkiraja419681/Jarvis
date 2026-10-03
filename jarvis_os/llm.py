@@ -119,8 +119,20 @@ class OllamaBackend:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # A 404 means the server is alive but the model is not pulled.
+            # Saying "unreachable" there sends the operator hunting the wrong bug.
+            if exc.code == 404:
+                requested = payload.get("model") or payload.get("name") or "the requested model"
+                raise LLMUnavailable(
+                    f"model '{requested}' is not installed on {self.base_url}. "
+                    f"Run: ollama pull {requested}") from exc
+            raise LLMUnavailable(
+                f"Ollama returned HTTP {exc.code} at {self.base_url}: {exc.reason}") from exc
         except urllib.error.URLError as exc:
-            raise LLMUnavailable(f"Ollama unreachable at {self.base_url}: {exc}") from exc
+            raise LLMUnavailable(
+                f"Ollama unreachable at {self.base_url} - is `ollama serve` "
+                f"running? ({exc.reason})") from exc
         except (json.JSONDecodeError, TimeoutError) as exc:
             raise LLMUnavailable(f"Malformed Ollama response: {exc}") from exc
 
@@ -214,6 +226,7 @@ class LLMClient:
         self._backends: dict[str, Any] = {}
         self._external: dict[str, dict[str, Any]] = {}
         self._approved_once: set[str] = set()
+        self._verified_models: tuple[str, ...] = ()
         self._install_ollama()
 
     # -------------------------------------------------------------- backend
@@ -342,6 +355,21 @@ class LLMClient:
         try:
             return self.ollama.chat(chosen, messages, payload_tools, temperature, fmt)
         except LLMUnavailable as exc:
+            # A model that simply is not installed is recoverable: retry once
+            # with a model this Ollama actually has. A dead server is not.
+            if "not installed" in str(exc) and not model:
+                replacement = self._fallback_model()
+                if replacement and replacement != chosen:
+                    try:
+                        reply = self.ollama.chat(replacement, messages,
+                                                  payload_tools, temperature, fmt)
+                        if self.audit:
+                            self.audit.record("llm", "model_fallback", "warn",
+                                              {"configured": chosen, "using": replacement,
+                                               "persona": persona})
+                        return reply
+                    except LLMUnavailable as retry_exc:
+                        exc = retry_exc
             if self.audit:
                 self.audit.record("llm", "chat", "unavailable",
                                   {"model": chosen, "error": str(exc), "persona": persona})
@@ -358,7 +386,64 @@ class LLMClient:
             "overseer": "reviewer_model",
             "reviewer": "reviewer_model",
         }.get(persona, "model")
-        return str(llm.get(key) or llm.get("model") or "llama3.1:8b")
+        configured = str(llm.get(key) or llm.get("model") or "")
+        if not configured:
+            return self._fallback_model() or "llama3.1:8b"
+        # Ollama accepts a request for a model it does not have and then blocks
+        # until the timeout instead of returning 404, so validate every persona's
+        # model (planner_model/reviewer_model can differ from llm.model) against
+        # the installed list rather than waiting 2 minutes per call to find out.
+        if not self._verified_models:
+            try:
+                self._verified_models = tuple(self.ollama.list_models())
+            except Exception:  # noqa: BLE001 - server down; let chat() report it
+                return configured
+        if self._verified_models and configured.split(":")[0] not in {
+            m.split(":")[0] for m in self._verified_models
+        }:
+            replacement = self._fallback_model()
+            if replacement and self.audit:
+                self.audit.record("llm", "model_fallback", "warn",
+                                  {"configured": configured, "using": replacement,
+                                   "persona": persona, "key": key,
+                                   "installed": list(self._verified_models)[:12]})
+            return replacement or configured
+        return configured
+
+    def _fallback_model(self) -> str:
+        """Pick an installed model when the configured one is not pulled."""
+        try:
+            installed = self.ollama.list_models()
+        except Exception:  # noqa: BLE001
+            return ""
+        if not installed:
+            return ""
+        exact = {m.split(":")[0] for m in installed}
+        for candidate in (str(self.config.get("llm.model", "")), "qwen3", "llama3.1",
+                          "qwen2.5-coder", "mistral", "phi3", "gemma3"):
+            base = candidate.split(":")[0]
+            if base and base in exact:
+                return next(m for m in installed if m.split(":")[0] == base)
+        return installed[0]
+
+    def resolve_model(self, persona: str = "default") -> str:
+        """Return a usable model, correcting a configured one that is missing."""
+        chosen = self._model_for(persona)
+        try:
+            installed = self.ollama.list_models()
+        except Exception:  # noqa: BLE001
+            return chosen
+        if not installed:
+            return chosen
+        bases = {m.split(":")[0] for m in installed}
+        if chosen.split(":")[0] in bases:
+            return chosen
+        replacement = self._fallback_model()
+        if replacement and self.audit:
+            self.audit.record("llm", "model_fallback", "warn",
+                              {"configured": chosen, "using": replacement,
+                               "installed": installed[:12]})
+        return replacement or chosen
 
     def ask_json(self, prompt: str, persona: str = "planner",
                  model: str | None = None) -> dict[str, Any] | None:

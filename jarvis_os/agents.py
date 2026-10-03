@@ -97,7 +97,8 @@ class Agent:
         self.llm = llm
         self.config = config
         self.audit = audit
-        self.system_prompt = system_prompt
+        # A str, never a callable. run() calls self.system_prompt().
+        self._system_prompt = system_prompt or ""
         self.max_tool_calls = max_tool_calls
         self.allowed_tools: set[str] = set()
         self.created_at = time.time()
@@ -110,8 +111,8 @@ class Agent:
         return self.config.honorific() if self.config else "Sir"
 
     def system_prompt(self) -> str:
-        if self.system_prompt:
-            return self.system_prompt
+        if self._system_prompt:
+            return self._system_prompt
         template = ROLE_LIBRARY.get(self.role, ROLE_LIBRARY["orchestrator"])
         return template.format(honorific=self.honorific)
 
