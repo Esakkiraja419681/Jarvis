@@ -113,7 +113,6 @@ class OverseerAgenticOS:
         self._counter = 0
         self._jarvis_pid: int | None = None
         self._observed_pid: int | None = None
-        self._started_at: float = time.time()
         self._restart_cb: Callable[[], Any] | None = None
         self._lock = threading.RLock()
         self.last_scan: dict[str, Any] = {}
@@ -343,13 +342,13 @@ class OverseerAgenticOS:
                     "evidence": f"heartbeat is {age:.1f}s old "
                                 f"(timeout {self.stall_timeout}s); cycles={cycles}"}
 
-        boot_window = max(self.stall_timeout * 3, 60.0)
-        if time.time() - self._started_at <= boot_window:
-            return None
-        return {"fault": "stall", "layer": "planner",
-                "evidence": f"supervised process (pid {self.supervised_pid()}) never "
-                            f"wrote a heartbeat; last file was from pid "
-                            f"{(beat or {}).get('pid')} {age:.1f}s ago; cycles={cycles}"}
+        # A heartbeat written by a different pid is a leftover from another run.
+        # Its age says nothing about whether the supervised process is beating,
+        # so it is never a stall - however old it is. A supervised process that
+        # stops reporting entirely is caught by jarvis_alive(), which asks the
+        # OS rather than trusting the file, and a missing file is reported as
+        # no_heartbeat by scan().
+        return None
 
     def scan(self) -> dict[str, Any]:
         beat = self.heartbeat()

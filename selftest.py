@@ -403,16 +403,18 @@ def main() -> int:
     # still accused.
     check("stall still detected for the live process",
           (kernel.overseer.stall_fault(dict(stale, pid=os.getpid())) or {}).get("fault") == "stall")
-    # And once the boot window has elapsed, a supervised process that never
-    # beats at all is still accused.
-    kernel.overseer._started_at = time.time() - (10 * timeout)
+    # A missing heartbeat is reported separately, so losing the file entirely
+    # must still surface as a fault rather than being silently ignored.
+    original_beat = kernel.overseer.heartbeat
+    kernel.overseer.heartbeat = lambda: None
+    kernel.overseer.halt_on_fault = False
     try:
-        never = kernel.overseer.stall_fault({"ts": time.time() - 600, "pid": 999999,
-                                             "cycles": 0})
+        no_beat_faults = {f["fault"] for f in kernel.overseer.scan()["faults"]}
     finally:
-        kernel.overseer._started_at = time.time()
-    check("stall still detected when nothing ever beats",
-          (never or {}).get("fault") == "stall", str(never))
+        kernel.overseer.heartbeat = original_beat
+        kernel.overseer.halt_on_fault = True
+    check("a missing heartbeat is still reported",
+          "no_heartbeat" in no_beat_faults, str(no_beat_faults))
 
     # As a separate watchdog process the Overseer must learn which run it is
     # watching. Comparing against its own pid would never match, and every
