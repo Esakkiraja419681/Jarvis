@@ -124,18 +124,92 @@ class UniversalLanguageLayer:
             return False
 
     def _detect_backends(self) -> None:
-        """Probe which offline backends exist. Never imports a heavy backend."""
+        """Probe which offline backends exist. Never imports a heavy backend.
+
+        Backend selection is per language pair, not global: Argos being
+        importable says nothing about whether it can translate *this* pair.
+        Argos ships no Tamil model at all, so a global "argos" choice silently
+        passed Tamil through untranslated. The chain is now resolved in
+        ``_chain_for`` against the pairs actually installed on disk.
+        """
         wanted = str(self.config.get("language.backend", "auto"))
         self._argos_installed = self._module_present("argostranslate")
         self._pkg = None
         self._argos_translate = None
-        if self._argos_installed:
-            self.backend = "argos"
-        if not self._argos_installed and wanted in ("auto", "nllb"):
-            if self._module_present("transformers"):
-                self.backend = "nllb"
-            else:
-                self.backend = "none"
+        self._pairs: set[tuple[str, str]] | None = None
+        self._nllb_ready = bool(wanted in ("auto", "nllb")
+                                and self._module_present("transformers")
+                                and self._nllb_weights_present())
+        # The local Ollama model is always a candidate: it is already running
+        # for reasoning, it stays on this machine, and it covers languages
+        # Argos has no package for.
+        self._ollama_ready = bool(wanted in ("auto", "ollama") and self.llm is not None)
+        self.backend = "ollama" if self._ollama_ready else (
+            "argos" if self._argos_installed else
+            "nllb" if self._nllb_ready else "none")
+
+    _WEIGHT_FILES = ("model.safetensors", "pytorch_model.bin")
+    _MIN_WEIGHT_BYTES = 512 * 1024 * 1024
+
+    def _nllb_weights_present(self) -> bool:
+        """Are a *complete* set of NLLB weights already on disk?
+
+        ``_nllb_translate`` loads with ``local_files_only=True`` so it can never
+        pull weights at runtime. Reporting the backend as ready when only the
+        Python packages are installed would advertise a translator that always
+        fails.
+
+        Presence of the repository directory is not enough: an interrupted
+        download leaves the directory in place while the snapshot is missing
+        either the tokenizer or the weights, so the resolved snapshot must
+        actually contain config + tokenizer + a plausibly sized weight file.
+        """
+        name = str(self.config.get("language.nllb_model",
+                                   "facebook/nllb-200-distilled-600M"))
+        cache = self.config.resolve("language.cache_dir")
+        try:
+            root = cache / ("models--" + name.replace("/", "--"))
+            snapshots = [root / "snapshots"] if (root / "snapshots").is_dir() else []
+            snapshots.append(cache / name)
+            for base in snapshots:
+                candidates = [base] if base.is_dir() and base.name != "snapshots" \
+                    else list(base.glob("*"))
+                for snap in candidates:
+                    if not (snap / "config.json").is_file():
+                        continue
+                    if not (snap / "tokenizer.json").is_file():
+                        continue
+                    for weights in self._WEIGHT_FILES:
+                        path = snap / weights
+                        try:
+                            if path.is_file() and path.stat().st_size >= self._MIN_WEIGHT_BYTES:
+                                return True
+                        except OSError:
+                            continue
+            return False
+        except OSError:
+            return False
+
+    def _installed_pairs(self) -> set[tuple[str, str]]:
+        """Cached Argos pairs. Probing argostranslate touches disk, not network."""
+        if self._pairs is None:
+            self._pairs = self._installed_argos_pairs()
+        return self._pairs
+
+    def _chain_for(self, source: str, target: str) -> list[str]:
+        """Offline backends able to translate ``source`` -> ``target``."""
+        chain: list[str] = []
+        if self._ensure_argos() and (source, target) in self._installed_pairs():
+            chain.append("argos")
+        if self._nllb_ready:
+            chain.append("nllb")
+        if self._ollama_ready:
+            chain.append("ollama")
+        return chain
+
+    def backend_for(self, source: str, target: str) -> str:
+        chain = self._chain_for(source, target)
+        return chain[0] if chain else "passthrough"
 
     def _ensure_argos(self) -> bool:
         """Import Argos on first real use and cache the module handles."""
@@ -215,8 +289,10 @@ class UniversalLanguageLayer:
         out = []
         if self._argos_installed:
             out.append("argos-translate (offline)")
-        if self.backend == "nllb":
+        if self._nllb_ready:
             out.append("nllb-200 (offline)")
+        if self._ollama_ready:
+            out.append("ollama-local (offline)")
         if not out:
             out.append("passthrough (no offline model installed)")
         return out
@@ -286,24 +362,109 @@ class UniversalLanguageLayer:
                 return self._cache[key]
 
         translated: str | None = None
-        if self._ensure_argos():
+        chain = self._chain_for(detection.language, target)
+        used = "passthrough"
+        for backend in chain:
             try:
-                translated = self._argos_translate(text, detection.language, target)
-            except Exception as exc:  # noqa: BLE001
+                if backend == "argos":
+                    translated = self._argos_translate(text, detection.language, target)
+                elif backend == "nllb":
+                    translated = self._nllb_translate(text, detection.language, target)
+                elif backend == "ollama":
+                    translated = self._ollama_translate(text, detection.language, target)
+            except Exception as exc:  # noqa: BLE001 - never break the reply path
                 if self.audit:
-                    self.audit.record("language", "translate:argos", "failed",
+                    self.audit.record("language", f"translate:{backend}", "failed",
                                       {"error": str(exc)[:200]})
-        if not translated and self.backend == "nllb":
-            translated = self._nllb_translate(text, detection.language, target)
+                translated = None
+            if translated:
+                used = backend
+                break
         if not translated:
             translated = text
             if self.audit:
                 self.audit.record("language", "translate", "passthrough",
                                   {"detected": detection.language, "target": target,
-                                   "backend": self.backend})
+                                   "backend": used, "tried": chain})
         with self._lock:
             self._cache[key] = translated
         return translated
+
+    _TRANSLATE_SYSTEM = (
+        "You are a translation engine. Translate the user's message into {target}. "
+        "Reply with ONLY the translated text: no preamble, no notes, no quotes, "
+        "no explanation, and do not address anyone. Preserve every number, "
+        "identifier, filename and command exactly as written. If the text is "
+        "already in {target}, repeat it unchanged."
+    )
+
+    def _ollama_translate(self, text: str, source: str, target: str) -> str | None:
+        """Translate with the already-running local Ollama model.
+
+        This is the only offline backend that covers Tamil: Argos publishes no
+        ``ta`` package at all. The model is the same local one used for
+        reasoning, so nothing leaves the machine and no extra download is
+        needed. Temperature is pinned to 0 for faithful translation.
+        """
+        if not self._ollama_ready or self.llm is None:
+            return None
+        target_name = LANGUAGE_NAMES.get(target, target)
+        reply = self.llm.chat(
+            text,
+            system=self._TRANSLATE_SYSTEM.format(target=target_name),
+            persona="translator",
+            temperature=0.0,
+        )
+        out = (getattr(reply, "text", "") or "").strip()
+        if not out:
+            return None
+        # Models sometimes wrap output in quotes or a fenced block.
+        if len(out) > 1 and out[0] == out[-1] and out[0] in "\"'":
+            out = out[1:-1].strip()
+        if out.startswith("```") and out.endswith("```"):
+            out = out[3:-3].strip()
+        return out or None
+
+    # NLLB is keyed by ISO 639-3, the language layer detects ISO 639-1.
+    _NLLB_CODES: dict[str, str] = {
+        "en": "eng", "ta": "tam", "hi": "hin", "bn": "ben", "te": "tel",
+        "kn": "kan", "ml": "mal", "gu": "guj", "pa": "pan", "ur": "urd",
+        "or": "ory", "mr": "mar", "ar": "arb", "he": "heb", "fa": "pes",
+        "de": "deu", "fr": "fra", "es": "spa", "ru": "rus", "zh": "zho",
+        "ja": "jpn", "ko": "kor", "pt": "por", "it": "ita", "nl": "nld",
+        "tr": "tur", "vi": "vie", "id": "ind", "th": "tha", "pl": "pol",
+    }
+
+    @classmethod
+    def _iso3(cls, code: str) -> str:
+        """ISO 639-1 -> ISO 639-3, which is what NLLB keys its vocabulary on."""
+        return cls._NLLB_CODES.get(code, code)
+
+    _LANG_TOKEN = re.compile(r"^[a-z]{2,3}_[A-Z][a-z]{3}$")
+
+    @classmethod
+    def _nllb_lang_ids(cls, tokenizer) -> dict[str, int]:
+        """Map ISO 639-3 -> NLLB language-token id, read from the tokenizer.
+
+        NLLB does not use a fixed script suffix: languages that have their own
+        script use it (``tam_Taml``, ``hin_Deva``, ``ben_Beng``) while others
+        use Latin (``eng_Latn``). Assuming ``_Latn`` silently mistranslates --
+        an unknown code resolves to a meaningless id and the model emits the
+        wrong language entirely. The tokens are added tokens, so they are only
+        reachable through id decoding, not the token->id vocabulary.
+        """
+        found: dict[str, int] = {}
+        top = int(getattr(tokenizer, "vocab_size", 0) or 0)
+        if top <= 0:
+            return found
+        for token_id in range(max(0, top - 1024), top):
+            try:
+                token = tokenizer.convert_ids_to_tokens(token_id)
+            except Exception:  # noqa: BLE001
+                continue
+            if token and cls._LANG_TOKEN.match(str(token)):
+                found[str(token).split("_", 1)[0]] = token_id
+        return found
 
     def _nllb_translate(self, text: str, source: str, target: str) -> str | None:
         try:
@@ -317,12 +478,21 @@ class UniversalLanguageLayer:
                 cache = self.config.resolve("language.cache_dir")
                 cache.mkdir(parents=True, exist_ok=True)
                 try:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        name, cache_dir=str(cache), local_files_only=True)
+                    lang_ids = self._nllb_lang_ids(tokenizer)
+                    if not lang_ids:
+                        raise RuntimeError("nllb language vocabulary missing")
                     self._nllb[name] = {
-                        "tok": AutoTokenizer.from_pretrained(
-                            name, cache_dir=str(cache), local_files_only=True),
+                        "tok": tokenizer,
+                        "lang_ids": lang_ids,
                         "model": AutoModelForSeq2SeqLM.from_pretrained(
                             name, cache_dir=str(cache), local_files_only=True),
                     }
+                    # generation_config carries max_length=200; leaving it set
+                    # while also passing max_new_tokens only produces a warning
+                    # on every single translation.
+                    self._nllb[name]["model"].generation_config.max_length = None
                 except Exception:  # noqa: BLE001
                     self._nllb[name] = {}
                     return None
@@ -331,12 +501,29 @@ class UniversalLanguageLayer:
             return None
         try:
             tokenizer, model = bundle["tok"], bundle["model"]
-            tokenizer.src_lang = f"{source}_Latn" if source != "en" else "eng_Latn"
-            tokenizer.tgt_lang = f"{target}_Latn" if target != "en" else "eng_Latn"
+            lang_ids: dict[str, int] = bundle["lang_ids"]
+            tgt3 = self._iso3(target)
+            if tgt3 not in lang_ids:
+                return None
+            src3 = self._iso3(source)
+            if src3 not in lang_ids:
+                return None
+            src_code = f"{src3}_Latn"
+            tokenizer.src_lang = src_code
+            # NLLB is a multilingual model sharing one vocabulary: without an
+            # explicit target-language BOS it silently emits whichever language
+            # it feels like, so the target must be forced at generate() time.
+            forced_bos = lang_ids[tgt3]
             inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
             with torch.no_grad():
-                output = model.generate(**inputs, max_new_tokens=512, num_beams=4)
-            return tokenizer.decode(output[0], skip_special_tokens=True)
+                output = model.generate(
+                    **inputs,
+                    forced_bos_token_id=forced_bos,
+                    max_new_tokens=512,
+                    num_beams=4,
+                )
+            decoded = tokenizer.decode(output[0], skip_special_tokens=True).strip()
+            return decoded or None
         except Exception as exc:  # noqa: BLE001
             if self.audit:
                 self.audit.record("language", "translate:nllb", "failed",
@@ -378,8 +565,10 @@ class UniversalLanguageLayer:
             detection_backend = "langdetect+script"
         except Exception:  # noqa: BLE001
             pass
-        return (f"language layer: target=en, reply={LANGUAGE_NAMES.get(self.preferred, self.preferred)}"
-                f" | translate={self.backend} | detect={detection_backend} | offline=True")
+        target_name = LANGUAGE_NAMES.get(self.preferred, self.preferred)
+        return (f"language layer: target=en, reply={target_name}"
+                f" | translate={self.backend_for('en', self.preferred)}"
+                f" | detect={detection_backend} | offline=True")
 
     def install_hint(self) -> str:
         return (

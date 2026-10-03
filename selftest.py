@@ -5,6 +5,7 @@ Run:  python selftest.py
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sys
@@ -32,6 +33,15 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 # Config keys that address persistent state. Every one is redirected into the
 # sandbox so a smoke run cannot mutate the operator's memory, lessons, audit
 # ledger, device registry, built software, or daemon control files.
+_LIVE_STATE_FILES = (
+    "config.json",
+    "data/memory.db",
+    "data/vectors.json",
+    "data/lessons.jsonl",
+    "data/actions.jsonl",
+    "data/audit_ledger.jsonl",
+)
+
 _DATA_PATHS = (
     "memory.sqlite_path",
     "memory.vector_path",
@@ -40,6 +50,7 @@ _DATA_PATHS = (
     "audit.ledger_path",
     "audit.sqlite_path",
     "overseer.heartbeat_path",
+    "overseer.control_file",
     "control_bridge.ipc_path",
     "control_bridge.token_file",
     "software_factory.build_root",
@@ -90,7 +101,32 @@ def sandbox_config(root: Path, live: Path) -> Config:
     return Config(path=cfg, root=live.parent)
 
 
+def live_fingerprint() -> dict[str, str]:
+    """SHA-256 of the operator's real state files.
+
+    The sandbox redirects every configured data path, but a hard-coded path or a
+    subsystem writing outside Config.resolve would still land here. Comparing
+    this fingerprint before and after the run turns "the smoke test must never
+    touch live state" from a claim into an assertion.
+    """
+    out: dict[str, str] = {}
+    for rel in _LIVE_STATE_FILES:
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        digest = hashlib.sha256()
+        try:
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError:
+            continue
+        out[rel] = digest.hexdigest()
+    return out
+
+
 def main() -> int:
+    before = live_fingerprint()
     sandbox = Path(tempfile.mkdtemp(prefix="jarvis-selftest-"))
     config = sandbox_config(sandbox, REPO_ROOT / "config.json")
     config.set_feature("overseer", False)
@@ -218,10 +254,15 @@ def main() -> int:
     check("shell allows python", ok, reason)
 
     print("\n== tools ==")
+    # ToolRegistry refuses any path outside the Jarvis root, so the scratch file
+    # cannot live in the TEMP sandbox. It is written to a test-only directory
+    # that the sandbox setup tears down, instead of into live data/.
+    smoke_rel = "data/.selftest_scratch/smoke.txt"
+    (REPO_ROOT / "data" / ".selftest_scratch").mkdir(parents=True, exist_ok=True)
     written = kernel.tools.call("file_write",
-                                {"path": "data/smoke.txt", "content": "Sir"}, require_permission=False)
+                                {"path": smoke_rel, "content": "Sir"}, require_permission=False)
     check("file_write", written.get("ok"), str(written))
-    read = kernel.tools.call("file_read", {"path": "data/smoke.txt"}, require_permission=False)
+    read = kernel.tools.call("file_read", {"path": smoke_rel}, require_permission=False)
     check("file_read", read.get("ok") and read.get("content") == "Sir")
     escaped = kernel.tools.call("file_read", {"path": "../../etc/passwd"}, require_permission=False)
     check("path escape blocked", not escaped.get("ok"), str(escaped))
@@ -443,6 +484,11 @@ def main() -> int:
 
     kernel.shutdown()
     shutil.rmtree(sandbox, ignore_errors=True)
+    shutil.rmtree(REPO_ROOT / "data" / ".selftest_scratch", ignore_errors=True)
+    after = live_fingerprint()
+    drifted = sorted(k for k in set(before) | set(after)
+                     if before.get(k) != after.get(k))
+    check("live state untouched by selftest", not drifted, ", ".join(drifted))
     print(f"  PASSED: {len(PASS)}    FAILED: {len(FAIL)}")
     if FAIL:
         print("  failing: " + ", ".join(FAIL))

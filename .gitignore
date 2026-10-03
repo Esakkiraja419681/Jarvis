@@ -1,10 +1,17 @@
+# Local translation model cache (multi-GB, re-downloadable).
+# Scratch output from selftest.py.
 *.key
+*.py[cod]
+__pycache__/
 config.json
+data/.selftest_baseline.json
+data/.selftest_scratch/
 data/actions.jsonl
 data/audit.db*
 data/audit_ledger.jsonl
 data/control.token
 data/heartbeat.json
+data/langcache/
 data/lessons.jsonl
 data/memory.db
 data/memory.db-*
