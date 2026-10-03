@@ -277,6 +277,52 @@ class OverseerAgenticOS:
         return findings[:10]
 
     # ------------------------------------------------------------------ scan
+    def heartbeat_is_current(self, beat: dict[str, Any]) -> bool:
+        """Does this heartbeat belong to the run being supervised?
+
+        The heartbeat file survives process exit, so on boot the Overseer can
+        read a perfectly healthy-looking file written by a run that has already
+        died. Judging the fresh process by it declares a stall within
+        milliseconds of startup, isolates a layer and stops the system. Only a
+        heartbeat carrying the supervised pid may be used to accuse it.
+        """
+        try:
+            beat_pid = int(beat.get("pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        supervised = self._jarvis_pid or os.getpid()
+        if not beat_pid or not supervised:
+            return True
+        return beat_pid == int(supervised)
+
+    def stall_fault(self, beat: dict[str, Any]) -> dict[str, Any] | None:
+        """A stall fault for ``beat``, or None when it is not evidence of one.
+
+        Two different situations look identical if you only compare timestamps:
+
+        * the supervised process is alive but stopped beating - a real stall;
+        * the file is a healthy leftover from a run that has already exited -
+          expected during the boot window before the first beat is written.
+
+        Judging the second by the first stops the system within milliseconds of
+        startup and disarms the permission gate, so a foreign heartbeat gets a
+        grace period instead of an immediate accusation.
+        """
+        age = self.age(beat)
+        if age <= self.stall_timeout:
+            return None
+        cycles = beat.get('cycles')
+        if self.heartbeat_is_current(beat):
+            return {"fault": "stall", "layer": "planner",
+                    "evidence": f"heartbeat is {age:.1f}s old "
+                                f"(timeout {self.stall_timeout}s); cycles={cycles}"}
+        if age <= self.stall_timeout * 3:
+            return None
+        return {"fault": "stall", "layer": "planner",
+                "evidence": f"heartbeat is {age:.1f}s old and was not written by "
+                            f"the supervised process (pid {os.getpid()}); "
+                            f"cycles={cycles}"}
+
     def scan(self) -> dict[str, Any]:
         beat = self.heartbeat()
         faults: list[dict[str, Any]] = []
@@ -284,22 +330,24 @@ class OverseerAgenticOS:
             faults.append({"fault": "no_heartbeat", "layer": "interface",
                            "evidence": "heartbeat file missing or unreadable"})
         else:
-            age = self.age(beat)
-            if age > self.stall_timeout:
-                faults.append({
-                    "fault": "stall", "layer": "planner",
-                    "evidence": f"heartbeat is {age:.1f}s old "
-                                f"(timeout {self.stall_timeout}s); cycles={beat.get('cycles')}",
-                })
-            for finding in self.check_runaway(beat):
-                faults.append({"fault": "runaway_loop", "layer": "interface",
-                               "evidence": finding})
-            for finding in self.check_hallucination(beat):
-                faults.append({"fault": "hallucination", "layer": "llm",
-                               "evidence": finding})
-            for finding in self.check_llm_health():
-                faults.append({"fault": "layer_failure", "layer": "llm",
-                               "evidence": finding})
+            stall = self.stall_fault(beat)
+            if stall:
+                faults.append(stall)
+            # cycles, last_output and the error counters describe one run. While
+            # the heartbeat still belongs to a dead process they are last run's
+            # history and accusing this run with them is a false positive; the
+            # grace period in stall_fault still catches a process that never
+            # beats at all.
+            if self.heartbeat_is_current(beat):
+                for finding in self.check_runaway(beat):
+                    faults.append({"fault": "runaway_loop", "layer": "interface",
+                                   "evidence": finding})
+                for finding in self.check_hallucination(beat):
+                    faults.append({"fault": "hallucination", "layer": "llm",
+                                   "evidence": finding})
+                for finding in self.check_llm_health():
+                    faults.append({"fault": "layer_failure", "layer": "llm",
+                                   "evidence": finding})
 
         for finding in self.check_memory_integrity():
             layer = "memory"
@@ -401,12 +449,18 @@ class OverseerAgenticOS:
         controls = {
             "permission": lambda: self._write_control({"gate_disarm": True,
                                                        "incident": incident.incident_id}),
-            "tools": lambda: self._write_control({"tools_disabled": True}),
-            "llm": lambda: self._write_control({"llm_disabled": True}),
-            "memory": lambda: self._write_control({"memory_readonly": True}),
-            "execution": lambda: self._write_control({"sandbox_enabled": False}),
-            "planner": lambda: self._write_control({"planner_disabled": True}),
-            "interface": lambda: self._write_control({"loop_interval_max": 60}),
+            "tools": lambda: self._write_control({"tools_disabled": True,
+                                                  "incident": incident.incident_id}),
+            "llm": lambda: self._write_control({"llm_disabled": True,
+                                                "incident": incident.incident_id}),
+            "memory": lambda: self._write_control({"memory_readonly": True,
+                                                   "incident": incident.incident_id}),
+            "execution": lambda: self._write_control({"sandbox_enabled": False,
+                                                      "incident": incident.incident_id}),
+            "planner": lambda: self._write_control({"planner_disabled": True,
+                                                    "incident": incident.incident_id}),
+            "interface": lambda: self._write_control({"loop_interval_max": 60,
+                                                      "incident": incident.incident_id}),
         }
         detail = controls[layer]()
         incident.action_taken += f"; isolated layer '{layer}'"
@@ -426,7 +480,10 @@ class OverseerAgenticOS:
             except (json.JSONDecodeError, OSError):
                 existing = {}
         existing.update({k: v for k, v in payload.items() if k != "incident"})
-        existing["last_incident"] = payload.get("incident", "")
+        # Only replace the recorded incident when there is one, so a control
+        # write that omits it cannot silently erase the previous incident id.
+        if payload.get("incident"):
+            existing["last_incident"] = payload["incident"]
         try:
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(existing, indent=2), encoding="utf-8")
@@ -477,7 +534,7 @@ class OverseerAgenticOS:
             elif name == "interface":
                 trace[name] = "ok" if not self.check_runaway(beat) else "FAULT"
             elif name == "planner":
-                trace[name] = "FAULT" if self.age(beat) > self.stall_timeout else "ok"
+                trace[name] = "FAULT" if self.stall_fault(beat) else "ok"
             else:
                 trace[name] = "ok"
         return trace

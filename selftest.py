@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -340,8 +341,13 @@ def main() -> int:
     kernel.config.set_phase("apply", True)
 
     print("\n== overseer ==")
+    from jarvis_os.overseer import Incident
     kernel.overseer.write_heartbeat({
-        "ts": time.time(), "pid": 1, "cycles": 5000, "started_at": time.time() - 1,
+        # pid must be the current process: the run-scoped checks below (cycles,
+        # last_output, error counters) are only evaluated for a heartbeat this
+        # run actually wrote.
+        "ts": time.time(), "pid": os.getpid(), "cycles": 5000,
+        "started_at": time.time() - 1,
         "consecutive_errors": 12, "llm_errors": 0, "last_output": "I have completed the task",
         "claimed_success": True, "verified_success": False, "notes": "",
     })
@@ -350,6 +356,39 @@ def main() -> int:
     check("runaway detected", "runaway_loop" in faults, str(faults))
     check("hallucination detected", "hallucination" in faults, str(faults))
     check("error storm detected", any("error storm" in f["evidence"] for f in report["faults"]))
+
+    # Regression: a heartbeat left behind by a dead process must not be read as
+    # a stall of the run that just started. That bug stopped Jarvis milliseconds
+    # after boot and disarmed the permission gate on every restart.
+    stale = {"ts": time.time() - (config.get("overseer.stall_timeout_seconds", 45) + 30),
+             "pid": 999999, "cycles": 1, "started_at": time.time() - 600}
+    check("stale heartbeat from a dead pid is not a stall",
+          kernel.overseer.stall_fault(stale) is None)
+    check("scan does not fault on a leftover heartbeat",
+          "stall" not in {f["fault"] for f in kernel.overseer.scan()["faults"]})
+    # Detection must survive: a live process that genuinely stops beating is
+    # still accused, and so is one that never beats at all.
+    live_stale = dict(stale, pid=os.getpid())
+    check("stall still detected for the live process",
+          (kernel.overseer.stall_fault(live_stale) or {}).get("fault") == "stall")
+    never_beat = {"ts": time.time() - 600, "pid": 999999, "cycles": 0}
+    check("stall still detected when nothing ever beats",
+          (kernel.overseer.stall_fault(never_beat) or {}).get("fault") == "stall")
+
+    # Regression: isolation must record which incident caused it, for every
+    # layer - only "permission" used to pass the id and the rest wrote "".
+    probe_control = config.resolve(config.get("overseer.control_file",
+                                               "data/overseer_control.json"))
+    probe_control.unlink(missing_ok=True)
+    marker = Incident(incident_id="inc_marker_probe", fault="stall", layer="planner",
+                      evidence="probe", action_taken="")
+    kernel.overseer.isolate_layer("planner", marker)
+    recorded = json.loads(probe_control.read_text(encoding="utf-8"))
+    check("isolation records the incident id", recorded.get("last_incident") == "inc_marker_probe",
+          str(recorded))
+    check("isolation flags the layer", recorded.get("planner_disabled") is True, str(recorded))
+    probe_control.unlink(missing_ok=True)
+
     incident = kernel.overseer.handle_fault("layer_failure", "tools", "smoke test fault")
     check("incident recorded", incident.incident_id.startswith("inc_"))
     check("cross-layer trace produced",
@@ -363,7 +402,7 @@ def main() -> int:
     # NOTE: drive repair() directly on a halted incident rather than
     # handle_fault("permission_violation") - the real path calls halt_jarvis(),
     # which taskkills this very process (correct behaviour, fatal in a test).
-    from jarvis_os.overseer import Incident, OverseerAgenticOS
+    from jarvis_os.overseer import OverseerAgenticOS
     ungated = OverseerAgenticOS(config, audit=kernel.audit, memory=kernel.memory,
                                 llm=kernel.llm, gate=None, root=config.root)
     probe = Incident(incident_id="inc_ungated_probe", fault="permission_violation",
