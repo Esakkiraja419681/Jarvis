@@ -22,7 +22,7 @@ python jarvis.py
 # bounded loop for a smoke test
 python jarvis.py --loop --cycles 2
 
-# full self-test suite (97 checks)
+# full self-test suite (130 checks)
 python selftest.py
 ```
 
@@ -217,7 +217,7 @@ delete it or run `overseer clear` to release the isolation.
 
 ```text
 jarvis.py                    CLI entry point / REPL
-selftest.py                  97-check end-to-end suite
+selftest.py                  130-check end-to-end suite
 config.json                  feature flags and settings
 jarvis_os/
   kernel.py                  central wiring, heartbeat, execution, loop
@@ -245,3 +245,8 @@ snapshot or `git reset --hard` can never destroy them.
   Overseer already running to notice.
 - The honourific is configurable; set it back to `Sir` with
   `--honorific "Sir"` or `config honorific "Sir"`.
+- `data/devices.json` registers only this machine. Cross-device control is
+  implemented and gated behind live approval, but it has never been exercised
+  against real second hardware: the control bridge binds `127.0.0.1` only, so a
+  genuinely remote device cannot be reached until that bind is deliberately
+  widened. See the `allow_remote_config` decision above.

@@ -128,7 +128,17 @@ class PythonSandbox:
                 self._log("code", "sandbox.run", "denied", {"bytes": len(code)})
                 return SandboxResult(ok=False, stderr="permission denied by operator", returncode=-2)
 
-        workdir = Path(tempfile.mkdtemp(prefix="jbx_", dir=str(self.root)))
+        # self.root is created once in __init__, but it can disappear before a
+        # later call (a crashed run's cleanup, a temp cleaner, AV quarantine).
+        # mkdtemp then raises a bare WinError 3 naming a path nobody can act on,
+        # so re-create the root here and report it explicitly if that fails too.
+        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            workdir = Path(tempfile.mkdtemp(prefix="jbx_", dir=str(self.root)))
+        except OSError as exc:
+            raise SandboxError(
+                f"sandbox root unavailable: {self.root} ({exc})"
+            ) from exc
         try:
             for name, content in (files or {}).items():
                 target = workdir / name

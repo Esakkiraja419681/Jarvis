@@ -23,6 +23,7 @@
 __pycache__/
 config.json
 data/**/*.log
+data/*.pid
 data/.selftest_baseline.json
 data/.selftest_scratch/
 data/actions.jsonl

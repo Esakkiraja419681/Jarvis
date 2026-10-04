@@ -33,6 +33,7 @@ for _stream in (sys.stdout, sys.stderr):
 from jarvis_os.config import Config
 from jarvis_os.kernel import JarvisKernel
 from jarvis_os.permissions import PermissionGate
+from jarvis_os.sandbox import PythonSandbox, SandboxError
 
 PASS, FAIL = [], []
 
@@ -139,8 +140,24 @@ def live_fingerprint() -> dict[str, str]:
 
 
 def main() -> int:
-    live_before = live_fingerprint()
+    """Run the suite inside a throwaway sandbox that is always torn down.
+
+    Teardown lives in a ``finally`` rather than at the end of the suite body.
+    Previously an unhandled exception, or a kill part-way through, left the whole
+    ``jarvis-selftest-*`` directory behind - which is how a crashed run leaked one
+    temp tree per attempt. ``ignore_errors=True`` keeps a failed teardown from
+    masking the error that triggered it.
+    """
     sandbox = Path(tempfile.mkdtemp(prefix="jarvis-selftest-"))
+    try:
+        return _run(sandbox)
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
+        shutil.rmtree(REPO_ROOT / "data" / ".selftest_scratch", ignore_errors=True)
+
+
+def _run(sandbox: Path) -> int:
+    live_before = live_fingerprint()
     config = sandbox_config(sandbox, REPO_ROOT / "config.json")
     config.set_feature("overseer", False)
     config.set_feature("voice", False)
@@ -261,6 +278,41 @@ def main() -> int:
     check("sandbox blocks socket import", not blocked.ok, blocked.stdout[:120])
     result = kernel.sandbox.run("while True:\n    pass", timeout=3, require_permission=False)
     check("sandbox enforces timeout", result.timed_out)
+
+    # Regression for the run9 crash. The sandbox root is created once in
+    # __init__, so anything that deletes it afterwards used to make mkdtemp raise
+    # a bare WinError 3 and take the whole suite down with it. Reproduce exactly
+    # that condition and require the run to recover.
+    workdir_parent = kernel.config.resolve("sandbox.workdir").parent
+    vanish_root = workdir_parent / "sandbox_vanished"
+    probe = PythonSandbox(root=vanish_root, config=kernel.config)
+    shutil.rmtree(vanish_root, ignore_errors=True)
+    check("sandbox root removed to simulate a vanished temp dir",
+          not vanish_root.exists())
+    recovered = probe.run("print('root came back')", require_permission=False)
+    check("sandbox recreates a vanished root",
+          recovered.ok and "root came back" in recovered.stdout,
+          recovered.stderr[:200])
+    check("recreated sandbox root is a directory", vanish_root.is_dir())
+
+    # ...and when the root genuinely cannot be recreated, the failure must name
+    # the root instead of surfacing an opaque path error from mkdtemp.
+    blocked_root = workdir_parent / "sandbox_blocked"
+    blocked = PythonSandbox(root=blocked_root, config=kernel.config)
+    shutil.rmtree(blocked_root, ignore_errors=True)
+    blocked_root.write_text("blocker", encoding="utf-8")
+    try:
+        blocked.run("print(1)", require_permission=False)
+        reported = False
+        detail = "no error raised"
+    except SandboxError as exc:
+        reported = "sandbox root unavailable" in str(exc)
+        detail = str(exc)[:160]
+    except OSError as exc:
+        reported = False
+        detail = f"raw {type(exc).__name__}: {exc}"[:160]
+    check("sandbox reports an unusable root by name", reported, detail)
+    blocked_root.unlink(missing_ok=True)
     bad = kernel.shell.validate("rm -rf / ; echo done")
     check("shell rejects metacharacters", not bad[0], bad[1])
     ok, reason = kernel.shell.validate("python --version")
@@ -697,7 +749,9 @@ def main() -> int:
           not kernel.config.resolve("data/overseer_control.json").exists())
 
     kernel.shutdown()
-    shutil.rmtree(sandbox, ignore_errors=True)
+    # The sandbox tree itself is torn down by main()'s finally on every exit
+    # path. This scratch dir is cleared here as well so a crashed run cannot
+    # hand the next one stale state.
     shutil.rmtree(REPO_ROOT / "data" / ".selftest_scratch", ignore_errors=True)
     after = live_fingerprint()
     drifted = sorted(k for k in set(live_before) | set(after)
