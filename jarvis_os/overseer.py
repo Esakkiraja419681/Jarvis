@@ -189,6 +189,35 @@ class OverseerAgenticOS:
         except (TypeError, ValueError):
             return 1e9
 
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """Ask the OS whether ``pid`` is a live process.
+
+        The heartbeat file can name a pid that has already exited, so the only
+        trustworthy liveness signal is the OS itself. Never raises: this is the
+        Overseer's last line of defence and must not die on a bad pid.
+        """
+        try:
+            pid = int(pid)
+        except (TypeError, ValueError):
+            return False
+        if pid <= 0:
+            return False
+        try:
+            if os.name == "nt":
+                import ctypes
+                handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+                if not handle:
+                    return False
+                code = ctypes.c_ulong()
+                ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return code.value == 259
+            os.kill(pid, 0)
+            return True
+        except (OSError, ValueError, AttributeError):
+            return False
+
     def jarvis_alive(self) -> bool:
         # The file can be missing, truncated or mid-write; asking the OS about
         # a pid is the only trustworthy liveness signal, and a missing file must
@@ -197,20 +226,7 @@ class OverseerAgenticOS:
         pid = beat.get("pid") or self._jarvis_pid
         if not pid:
             return False
-        try:
-            if os.name == "nt":
-                import ctypes
-                handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
-                if not handle:
-                    return False
-                code = ctypes.c_ulong()
-                ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-                ctypes.windll.kernel32.CloseHandle(handle)
-                return code.value == 259
-            os.kill(int(pid), 0)
-            return True
-        except (OSError, ValueError, AttributeError):
-            return False
+        return self._pid_alive(pid)
 
     # ----------------------------------------------------------- diagnostics
     def check_permission_integrity(self) -> list[str]:
@@ -314,14 +330,25 @@ class OverseerAgenticOS:
         return self._jarvis_pid or self._observed_pid or os.getpid()
 
     def adopt_observed_pid(self, beat: dict[str, Any]) -> None:
-        """Remember which foreign run is the one we are supervising."""
+        """Remember which foreign run is the one we are supervising.
+
+        Only a *live* pid may be adopted. The heartbeat file outlives the process
+        that wrote it, so a leftover from a run that has already exited is still
+        sitting there with a plausible pid. Adopting that dead pid would make
+        ``supervised_pid()`` return it, ``heartbeat_is_current()`` compare the
+        stale heartbeat against itself and return True, and the very guard that
+        is supposed to discount a stale file would instead launder it into
+        proof of a stall. Refusing to adopt a dead pid leaves the comparison
+        honest, and the run genuinely not beating is still caught by
+        ``jarvis_alive()``, which asks the OS.
+        """
         if self._jarvis_pid is not None or self._observed_pid is not None or not beat:
             return
         try:
             pid = int(beat.get("pid") or 0)
         except (TypeError, ValueError):
             return
-        if pid and pid != os.getpid():
+        if pid and pid != os.getpid() and self._pid_alive(pid):
             self._observed_pid = pid
 
     def heartbeat_is_current(self, beat: dict[str, Any]) -> bool:
@@ -788,11 +815,13 @@ class OverseerAgenticOS:
     def status(self) -> str:
         beat = self.beat()
         alive = self.jarvis_alive()
+        age = self.age(beat)
+        age_text = "never" if age >= 1e9 else f"{age:.1f}s"
         lines = [
             "OverseerAgenticOS",
             f"  running        : {self.running}",
             f"  jarvis alive   : {alive} (pid {beat.get('pid', '-')})",
-            f"  heartbeat age  : {f'{age:.1f}s' if age is not None else 'never'} "
+            f"  heartbeat age  : {age_text} "
             f"(stall threshold {self.stall_timeout}s)",
             f"  auto_repair    : {self.auto_repair}   auto_restart: {self.auto_restart}",
             f"  incidents      : {len(self.incidents)}",

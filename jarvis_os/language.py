@@ -557,6 +557,40 @@ class UniversalLanguageLayer:
         """Reasoning output -> operator's language, honorific-prefixed."""
         return self.to_operator_language(text)
 
+    def reply(self, text: str) -> str:
+        """Answer the operator in their own language, as one round trip.
+
+        Detects the language the operator wrote in and translates it to English
+        so all reasoning happens in a single language, asks the local model,
+        then translates the answer back into the operator's preferred language
+        and prefixes the honorific. This composes the pieces that already exist
+        here rather than reimplementing detection or translation, so there is
+        one code path to keep correct.
+
+        It never raises. A missing or dead backend degrades to echoing the
+        understood English text through the same outbound path, which still
+        translates and still carries the honorific - the interface degrades, it
+        does not disappear.
+        """
+        source = (text or "").strip()
+        if not source:
+            return self.process_outbound("I did not catch that, Sir. Please repeat.")
+        english, detection = self.process_inbound(source)
+        if not self._ollama_ready or self.llm is None:
+            return self.process_outbound(english)
+        try:
+            answer = self.llm.chat(english, persona="default")
+        except Exception as exc:  # noqa: BLE001
+            if self.audit:
+                self.audit.record("language", "reply", "failed",
+                                  {"error": str(exc)[:200],
+                                   "detected": detection.language,
+                                   "confidence": round(detection.confidence, 3)},
+                                  actor="language")
+            return self.process_outbound(english)
+        out = (getattr(answer, "text", "") or "").strip()
+        return self.process_outbound(out or english)
+
     def wrap_plan(self, steps: Iterable[str], title: str = "Plan") -> str:
         body = "\n".join(f"  {i}. {s}" for i, s in enumerate(steps, 1))
         return self.process_outbound(f"{title}:\n{body}")

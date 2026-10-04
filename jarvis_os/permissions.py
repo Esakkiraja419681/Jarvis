@@ -73,7 +73,7 @@ class PermissionGate:
                  voice_active: Callable[[], bool] | None = None) -> None:
         self.config = config
         self.audit = audit
-        self.honorific = config.honorific
+        self.honorific = config.honorific()
         self._text_input = text_input or self._console_input
         self._voice_input = voice_input
         self._voice_active = voice_active or (lambda: False)
