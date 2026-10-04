@@ -18,10 +18,13 @@ with ``langdetect``/``langid`` if those happen to be present.
 from __future__ import annotations
 
 import importlib.util
+import logging
 import re
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+
+log = logging.getLogger(__name__)
 
 # ------------------------------------------------------------------- scripts
 SCRIPT_RANGES: dict[str, tuple[tuple[int, int], ...]] = {
@@ -377,8 +380,38 @@ class UniversalLanguageLayer:
         return self.translate(text, "en"), detection
 
     # ---------------------------------------------------------- translation
+    # Operator-visible reasons a sentence could not be translated. Echoing the
+    # source silently was the original bug: an untranslated Tamil sentence came
+    # back looking exactly like a successful English translation.
+    _NOTE_MISSING_NLLB = "translation skipped: NLLB model not installed"
+    _NOTE_MISSING_NLLB_NO_FALLBACK = (
+        "translation skipped: NLLB model not installed and no fallback "
+        "backend could translate it")
+    _NOTE_NO_BACKEND = "translation skipped: no offline model for {pair}"
+    _NOTE_BACKENDS_FAILED = "translation skipped: every backend failed for {pair}"
+
+    def _skip_note(self, source: str, target: str, chain: list[str]) -> str:
+        """Why ``source`` -> ``target`` was not translated, in operator words.
+
+        ``chain`` is every backend that was actually attempted. Blaming only
+        the missing model would hide a fallback that was tried and also
+        failed, so those two outcomes are worded separately.
+        """
+        pair = f"{source}->{target}"
+        if not self._nllb_weights_present():
+            return (self._NOTE_MISSING_NLLB_NO_FALLBACK if chain
+                    else self._NOTE_MISSING_NLLB)
+        if not chain:
+            return self._NOTE_NO_BACKEND.format(pair=pair)
+        return self._NOTE_BACKENDS_FAILED.format(pair=pair)
+
     def translate(self, text: str, target: str | None = None) -> str:
-        """Translate offline. Returns ``text`` unchanged if no backend exists."""
+        """Translate offline, falling through Argos, NLLB and Ollama in order.
+
+        When no backend can serve the pair the source comes back carrying a
+        visible ``[translation skipped: ...]`` note rather than unchanged text,
+        so the operator can never mistake a passthrough for a translation.
+        """
         target = target or self.preferred
         if not text or not text.strip():
             return text
@@ -410,11 +443,17 @@ class UniversalLanguageLayer:
                 used = backend
                 break
         if not translated:
-            translated = text
+            note = self._skip_note(detection.language, target, chain)
+            log.warning("translation unavailable %s: %s (backends tried: %s)",
+                        f"{detection.language}->{target}", note, chain or ["none"])
             if self.audit:
                 self.audit.record("language", "translate", "passthrough",
                                   {"detected": detection.language, "target": target,
                                    "backend": used, "tried": chain})
+            # Prefixed here so the notice reaches the operator with the
+            # honorific even when translate() is called directly. ``prefix`` is
+            # idempotent, so the operator reply path cannot double it.
+            translated = self.prefix(f"{note} {text}")
         with self._lock:
             self._cache[key] = translated
         return translated

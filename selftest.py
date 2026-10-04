@@ -33,6 +33,7 @@ for _stream in (sys.stdout, sys.stderr):
 from jarvis_os.config import Config
 from jarvis_os.daemon import BackgroundDaemon, DaemonState
 from jarvis_os.kernel import JarvisKernel
+from jarvis_os.language import UniversalLanguageLayer
 from jarvis_os.permissions import PermissionGate
 from jarvis_os.sandbox import PythonSandbox, SandboxError
 
@@ -427,6 +428,78 @@ def _run(sandbox: Path) -> int:
           "install_argos_packages must refuse without explicit approval")
     check("no argos boot hook remains",
           not hasattr(kernel.language, "_update_argos_index"))
+
+    # Regression: with the NLLB weights off disk, translate() returned the source
+    # verbatim, so an untranslated Tamil sentence came back looking exactly like
+    # a successful English translation. A complete model tree is fabricated in
+    # the sandbox cache with a *sparse* weight file, so the rename below is a
+    # real present -> absent transition instead of a test that passes either way.
+    # Nothing is deleted and nothing is ever downloaded.
+    _nllb_name = str(kernel.language.config.get(
+        "language.nllb_model", "facebook/nllb-200-distilled-600M"))
+    _cache_dir = kernel.language.config.resolve("language.cache_dir")
+    _snap_root = _cache_dir / ("models--" + _nllb_name.replace("/", "--")) / "snapshots"
+    _probe = _snap_root / "selftest-probe"
+    # Must move *out* of snapshots/: _nllb_weights_present() globs snapshots/*,
+    # so a sibling rename would still be found with its weights intact.
+    _aside = _cache_dir / "selftest-probe-aside"
+    _probe.mkdir(parents=True, exist_ok=True)
+    (_probe / "config.json").write_text("{}", encoding="utf-8")
+    (_probe / "tokenizer.json").write_text("{}", encoding="utf-8")
+    # Sparse: truncate() reserves the size gate without writing 512 MB.
+    with open(_probe / "model.safetensors", "wb") as _fh:
+        _fh.truncate(UniversalLanguageLayer._MIN_WEIGHT_BYTES)
+    try:
+        # Detection must be able to see the weights, otherwise the rename below
+        # proves nothing about the missing-model branch.
+        _present = UniversalLanguageLayer(kernel.config, llm=None)
+        check("nllb weights detected before the rename",
+              _present._nllb_weights_present(),
+              "the sparse weight file must clear the size gate")
+
+        _probe.rename(_aside)
+
+        # Built with llm=None so a live local model cannot quietly satisfy the
+        # request, and constructed after the rename so backend detection sees
+        # the weights as genuinely absent.
+        _bare = UniversalLanguageLayer(kernel.config, llm=None)
+        check("nllb weights absent after the rename",
+              not _bare._nllb_weights_present())
+        # Distinct from every string translated above, so a cached passthrough
+        # can never mask the notice.
+        _skip_src = "இன்று மழை பெய்கிறது"
+        _skip_out = _bare.translate(_skip_src, "en")
+        check("missing model is reported, not echoed",
+              _skip_out != _skip_src and "translation skipped" in _skip_out,
+              _skip_out[:160])
+        check("missing-model note names nllb",
+              "NLLB model not installed" in _skip_out, _skip_out[:160])
+        check("skip note is honorific-prefixed",
+              _skip_out.startswith(f"{_bare.honorific},"), _skip_out[:160])
+        check("skip note keeps the original text",
+              _skip_src in _skip_out, _skip_out[:160])
+        check("operator reply path does not double the honorific",
+              _bare.prefix(_skip_out) == _skip_out, _skip_out[:160])
+
+        # An alternate backend that is available must be used before giving up.
+        class _StubReply:
+            text = "It is raining today"
+
+        class _StubLLM:
+            def chat(self, text, system=None, persona=None, temperature=None):
+                return _StubReply()
+
+        _alt = UniversalLanguageLayer(kernel.config, llm=_StubLLM())
+        _alt_out = _alt.translate(_skip_src, "en")
+        check("fallback backend used before reporting unavailable",
+              _alt_out == "It is raining today"
+              and "translation skipped" not in _alt_out, _alt_out[:160])
+        check("fallback layer still reports nllb as not ready",
+              not _alt._nllb_ready, str(_alt._nllb_ready))
+    finally:
+        for _p in (_probe, _aside):
+            shutil.rmtree(_p, ignore_errors=True)
+    check("fabricated model tree cleaned up", not _probe.exists() and not _aside.exists())
 
     print("\n== software factory ==")
     build = kernel.software.build("hello world greeting program")
