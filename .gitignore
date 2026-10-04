@@ -1,9 +1,26 @@
-# Local translation model cache (multi-GB, re-downloadable).
-# Scratch output from selftest.py.
+# --- local translation model cache (multi-GB, re-downloadable) ---
+# --- persistent memory / audit (never committed; also excluded by MEMORY_GLOBS
+# --- python bytecode caches ---
+# --- scratch: editors / tooling / editors' backups ---
+# --- scratch: runtime logs & one-off test artefacts ---
+# --- scratch: selftest.py output ---
+# --- secrets / local-only config ---
+# --- volatile runtime state ---
+# compiled artefacts of every module land in git history each time.
+# in jarvis_os/selfupdate.py, this is defence in depth) ---
+# selftest.py snapshots the whole worktree on every run, so without these the
+*$py.class
+*.bak
 *.key
+*.orig
 *.py[cod]
+*.rej
+*.tmp
+*~
+.scratch/
 __pycache__/
 config.json
+data/**/*.log
 data/.selftest_baseline.json
 data/.selftest_scratch/
 data/actions.jsonl
@@ -11,9 +28,16 @@ data/audit.db*
 data/audit_ledger.jsonl
 data/control.token
 data/heartbeat.json
+data/jarvis_daemon.log
 data/langcache/
 data/lessons.jsonl
 data/memory.db
 data/memory.db-*
+data/selftest_run*.err
+data/selftest_run*.log
+data/smoke.txt
 data/vectors.json
 data/vectors.json.tmp
+scratch/
+temp/
+tmp/

@@ -298,7 +298,27 @@ def main() -> int:
     out = kernel.language.process_outbound("All systems are nominal.")
     check("responses honorific-prefixed", out.startswith("Sir"), out[:60])
     check("honorific not doubled",
-          not kernel.language.process_outbound("Sir, ready.").startswith("Sir, Sir"))
+          not kernel.language.process_outbound("Sir, ready.").startswith("Sir, Sir"),
+          "prefix() must add 'Sir' exactly once")
+    # The model often opens its own reply with a Tamil honorific. Left in place
+    # the operator reads "Sir, ஐயா, ..."; these lock in that it is removed.
+    _pfx = kernel.language.prefix
+    check("model Tamil honorific stripped",
+          _pfx("ஐயா, அனைத்து அமைப்புகளும் செயல்படுகின்றன.")
+          == "Sir, அனைத்து அமைப்புகளும் செயல்படுகின்றன.",
+          _pfx("ஐயா, அனைப்புகளும் செயல்படுகின்றன."))
+    check("model 'Sir' plus Tamil honorific both stripped",
+          _pfx("Sir, ஐயா, வணக்கம்") == "Sir, வணக்கம்",
+          _pfx("Sir, ஐயா, வணக்கம்"))
+    check("real word starting with an honorific is preserved",
+          _pfx("ஐயாவு அம்மா வீடு") == "Sir, ஐயாவு அம்மா வீடு",
+          "must not mangle 'ஐயாவு' (grandfather) - the mid-word guard")
+    check("real word starting with 'திரு' is preserved",
+          _pfx("திருமலை நகரம்") == "Sir, திருமலை நகரம்",
+          "must not mangle 'திருமலை' (Tirumalai)")
+    check("mid-sentence honorific is never stripped",
+          _pfx("நான் ஐயாவைப் பார்த்தேன்") == "Sir, நான் ஐயாவைப் பார்த்தேன்",
+          "only the front of the string is ever examined")
     check("translation never auto-downloads models",
           not kernel.language.install_argos_packages().get("ok", True)
           or kernel.language._argos_installed is False,

@@ -540,14 +540,68 @@ class UniversalLanguageLayer:
             return self.prefix(text)
         return self.prefix(self.translate(text, self.preferred))
 
+    # Honorifics the local model likes to prepend to its own Tamil replies.
+    # Left in place the operator reads "Sir, ஐயா, ...". Longer forms come first
+    # so that the longer match wins over any prefix of itself ("திருமதி"
+    # before "திரு").
+    _MODEL_HONORIFICS = ("திருமதி", "ஐயா", "சார்", "திரு", "ஜெய்")
+    # A match only counts as an honorific when one of these follows it. Tamil
+    # runs suffixes on without a space, so this is what separates the
+    # honorific "ஐயா" from the ordinary word "ஐயாவு" (grandfather).
+    _HONORIFIC_DELIMITERS = " \t\n\r\u200b,.!?:;"
+
+    def _strip_model_honorific(self, text: str) -> str:
+        """Drop a leading honorific the model added for itself.
+
+        Returns the text with that honorific and the separator after it
+        removed, or the text unchanged when it does not open with one. Only
+        the start of the string is ever examined, so a word that merely begins
+        with the same letters is left alone and nothing is ever removed from
+        the middle of a sentence.
+        """
+        for honorific in self._MODEL_HONORIFICS:
+            if not text.startswith(honorific):
+                continue
+            rest = text[len(honorific):]
+            if rest and rest[0] not in self._HONORIFIC_DELIMITERS:
+                # Mid-word continuation such as the "ஐயா" of "ஐயாவு அம்மா வீடு".
+                # That is a real word, not an address, so keep the text as is.
+                return text
+            return rest.lstrip(self._HONORIFIC_DELIMITERS).strip()
+        return text
+
     def prefix(self, text: str) -> str:
-        """Every utterance to the operator starts with the honorific."""
+        """Every utterance to the operator starts with the honorific.
+
+        The model opens its replies with an honorific of its own - sometimes
+        the same "Sir", more often a Tamil one - so any leading honorific is
+        peeled off and the operator's single honorific is applied once. Only
+        the front of the string is touched; the rest passes through verbatim.
+        """
         honorific = self.honorific
         body = text or ""
-        stripped = body.lstrip()
-        if stripped.lower().startswith(honorific.lower()):
-            return body
-        return f"{honorific}, {stripped}"
+        remainder = body.lstrip()
+
+        # Bounded rather than `while remainder != previous`: an empty
+        # honorific would otherwise never consume a character and spin.
+        for _ in range(4):
+            if not remainder:
+                break
+            if honorific and remainder.lower().startswith(honorific.lower()):
+                # Take the separator with it, or "Sir, ஐயா, ..." would be left
+                # holding a stray comma ahead of the honorific we peel next.
+                remainder = remainder[len(honorific):].lstrip(
+                    self._HONORIFIC_DELIMITERS)
+                continue
+            trimmed = self._strip_model_honorific(remainder)
+            if trimmed == remainder:
+                break
+            remainder = trimmed
+
+        if not remainder:
+            # The reply was nothing but an honorific.
+            return honorific
+        return f"{honorific}, {remainder}"
 
     def process_inbound(self, text: str) -> tuple[str, Detection]:
         """Operator input -> English for reasoning + detection result."""
