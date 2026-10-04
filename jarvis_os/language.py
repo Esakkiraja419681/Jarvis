@@ -63,14 +63,33 @@ LANGUAGE_NAMES: dict[str, str] = {
 _COMMON_WORDS: dict[str, set[str]] = {
     "en": {"the", "is", "and", "of", "to", "in", "you", "sir", "jarvis", "please",
            "with", "for", "not", "this", "that", "have", "will", "can", "what"},
+    # Tamil script plus common romanisations. Without these, transliterated Tamil
+    # reaches langdetect and comes back as "fi"/"id" with high confidence.
     "ta": {"அது", "இது", "என்று", "ஆம்", "நீங்கள்", "நான்", "என்ன", "எப்படி",
-           "செய்", "ஆண்ட", "பின்", "ஒரு", "உள்ள", "வேண்டும்", "நன்றி", "சார்"},
+           "செய்", "ஆண்ட", "பின்", "ஒரு", "உள்ள", "வேண்டும்", "நன்றி", "சார்",
+           "vanakkam", "eppadi", "eppadhi", "irukkirukkal", "naanungal", "nanri",
+           "thambi", "akka", "appa", "anna", "nanba", "yaaru", "enga", "saapadu",
+           "vayiru", "pesum", "kelvi", "sri", "lanka"},
     "hi": {"और", "का", "की", "है", "में", "से", "यह", "वह", "कि", "कर", "सर",
            "क्या", "कैसे", "मुझे", "देता"},
     "es": {"el", "la", "de", "que", "y", "en", "los", "se", "por", "con", "para"},
-    "fr": {"le", "la", "de", "et", "est", "un", "une", "pour", "dans", "avec", "vous"},
-    "de": {"der", "die", "und", "ist", "nicht", "sie", "mit", "für", "das", "von"},
+    "fr": {"le", "la", "de", "et", "est", "un", "une", "pour", "dans", "avec", "vous",
+           "bonjour", "salut", "bonsoir", "merci", "beaucoup", "oui", "tres",
+           "bien", "comment", "ou", "au", "aux", "revoir", "svp"},
+    "de": {"der", "die", "und", "ist", "nicht", "sie", "mit", "für", "das", "von",
+           "guten", "tag", "wie", "geht", "dir", "danke", "bitte", "morgen",
+           "abend", "hallo", "ich", "du", "mir", "gut", "alles", "doch", "sehr"},
 }
+
+# langdetect is a character n-gram model trained on full prose. Fed a single word
+# or a romanisation it returns confidently wrong answers ("fi" at 1.00 for
+# "vanakkam sir"), so it is only trusted on long input with a high margin.
+_LANGDETECT_MIN_WORDS = 6
+_LANGDETECT_MIN_CONF = 0.90
+
+# An honorific such as "sir" gives English the same lexicon score as a Tamil
+# romanisation, so the Tamil marker needs a floor to win the tie.
+_TA_LATIN_MIN_SCORE = 0.6
 
 
 @dataclass(slots=True)
@@ -304,14 +323,19 @@ class UniversalLanguageLayer:
     def detect(self, text: str) -> Detection:
         if not text or not text.strip():
             return Detection("en", 0.0, "empty")
-        try:  # optional refinement
+        script = self._detect_by_script(text)
+        if script.method == "script":
+            return script  # native script outranks any n-gram guess
+        try:  # optional refinement, long and confident input only
             from langdetect import detect_langs, DetectorFactory
             DetectorFactory.seed = 0
-            best = max(detect_langs(text), key=lambda d: d.prob)
-            return Detection(best.lang, float(best.prob), "langdetect")
+            if len(re.findall(r"\w+", text)) >= _LANGDETECT_MIN_WORDS:
+                best = max(detect_langs(text), key=lambda d: d.prob)
+                if best.prob >= _LANGDETECT_MIN_CONF:
+                    return Detection(best.lang, float(best.prob), "langdetect")
         except Exception:  # noqa: BLE001
             pass
-        return self._detect_by_script(text)
+        return script
 
     def _detect_by_script(self, text: str) -> Detection:
         counts: dict[str, int] = {}
@@ -342,6 +366,8 @@ class UniversalLanguageLayer:
             for lang, common in _COMMON_WORDS.items()
         }
         lang, score = max(scores.items(), key=lambda kv: kv[1])
+        if lang != "ta" and scores.get("ta", 0.0) > 0.0:
+            lang, score = "ta", max(scores["ta"], _TA_LATIN_MIN_SCORE)
         return Detection(lang if score > 0.05 else "en", score or 0.35, "lexicon")
 
     def detect_to_english(self, text: str) -> tuple[str, Detection]:
