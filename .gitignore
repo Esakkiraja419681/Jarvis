@@ -39,6 +39,8 @@ data/selftest_run*.log
 data/smoke.txt
 data/vectors.json
 data/vectors.json.tmp
+# machine-local agent/tooling config, not part of the shipped kernel
+opencode.json
 scratch/
 temp/
 tmp/
