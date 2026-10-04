@@ -739,6 +739,10 @@ def _run(sandbox: Path) -> int:
     check("lessons survived close/reopen", reopened.stats["lessons"] == lessons_snapshot)
     check("integrity holds after reopen", reopened.integrity_report()["ok"] == integrity_before)
     check("boot count increments", reopened.stats["boots"] >= 2)
+    # kernel.shutdown() closes kernel.memory, but this second handle on the same
+    # file stays open and keeps memory.db locked on Windows, so the teardown
+    # rmtree skips it and leaves the whole sandbox tree behind. Close it here.
+    reopened.close()
 
     # The fault injected above must not leave the next boot permanently
     # disarmed - clear the isolation so the next run starts clean.

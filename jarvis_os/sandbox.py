@@ -131,9 +131,9 @@ class PythonSandbox:
         # self.root is created once in __init__, but it can disappear before a
         # later call (a crashed run's cleanup, a temp cleaner, AV quarantine).
         # mkdtemp then raises a bare WinError 3 naming a path nobody can act on,
-        # so re-create the root here and report it explicitly if that fails too.
-        self.root.mkdir(parents=True, exist_ok=True)
+        # so re-create the root here and report it by name if that fails too.
         try:
+            self.root.mkdir(parents=True, exist_ok=True)
             workdir = Path(tempfile.mkdtemp(prefix="jbx_", dir=str(self.root)))
         except OSError as exc:
             raise SandboxError(
