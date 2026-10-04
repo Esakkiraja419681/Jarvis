@@ -73,9 +73,17 @@ build <spec>         generate + install software
 software <status|logs|configure|stop|start> <id>
 software status      inspect the durable software registry
 
-devices              list registered devices
-device config <id> <key> <value>   change a remote setting (asks permission)
-device delete <id>
+agent list              list every live agent
+agent add <name> <role> register a new agent at runtime
+agent remove <name>
+
+device list             list registered devices
+device add <id> [url]   register a remote device (asks permission)
+device reach <id>       contact a device's /health endpoint (asks permission)
+device configure <id> <program> [action]   push a control change (asks permission)
+device trust <id>       toggle the trusted flag (asks permission)
+device remove <id>      revoke a device (asks permission)
+device current          show the machine Jarvis is running on
 
 background <status|start|stop|attach|recall>
 
@@ -123,6 +131,28 @@ tools refuse paths outside the project root.
 software action and Overseer action is appended to a hash-chained SQLite ledger.
 Writes use `BEGIN IMMEDIATE`, so concurrent processes interleave safely and
 `audit verify` recomputes the whole chain.
+
+**`devices.allow_remote_config` stays `false`, and the default is deliberate.**
+`device configure` is refused outright while it is off - before the per-action
+`cross_device` approval is even consulted - so remote configuration is a local-only
+operation. Do not flip it on to make a device reachable:
+
+* `ControlBridge` binds `control_bridge.rest_host`, which defaults to `127.0.0.1`
+  (`jarvis_os/control.py`), and is token-protected. It is not listening on the LAN,
+  so no other machine can be configured no matter what this flag says. Enabling it
+  cannot make the feature work.
+* Because the only reachable control endpoint is the laptop's own loopback one,
+  turning the flag on would let Jarvis reconfigure *itself* over HTTP while the
+  target nominally looked like a remote device. That is precisely the confusion
+  that produced a phantom "phone" entry pointing at the host's own address; the
+  entry has been removed rather than repointed.
+* The flag is the second brake behind live approval. Defaulting it off keeps a
+  whole class of remote writes shut until someone deliberately reopens it.
+
+Treat `false` as the standing default. Only consider `true` when all four hold:
+a real second device exists, its endpoint has been verified reachable, the control
+bridge is still loopback-bound and token-protected, and the operator opts in for
+that session knowing the target is a genuine separate machine.
 
 ---
 

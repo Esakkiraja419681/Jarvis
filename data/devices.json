@@ -13,18 +13,6 @@
       "trusted": true,
       "status": "local",
       "notes": "The machine Jarvis OS is running on right now."
-    },
-    {
-      "id": "phone",
-      "label": "LAPTOP-G1EUHLTR (this machine)",
-      "kind": "host",
-      "endpoint": "http://192.168.1.9:8770",
-      "os": "Windows 11",
-      "granted_at": 1790997352.8627448,
-      "last_seen": null,
-      "trusted": true,
-      "status": "local",
-      "notes": "The machine Jarvis OS is running on right now."
     }
   ]
 }

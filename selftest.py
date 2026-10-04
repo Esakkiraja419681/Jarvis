@@ -584,14 +584,36 @@ def main() -> int:
 
     print("\n== devices & daemon ==")
     check("local device registered", kernel.devices.current in kernel.devices.devices)
-    kernel.devices.devices["phone"] = kernel.devices._local_device()
-    kernel.devices.devices["phone"].device_id = "phone"
-    kernel.devices.devices["phone"].endpoint = "http://192.168.1.9:8770"
+    # Assert persistence for real. The old check ended in "... or True", so it
+    # passed unconditionally and could never have caught the phantom below.
+    probe = kernel.devices._local_device()
+    probe.device_id = "probe"
+    probe.endpoint = ""
+    kernel.devices.devices["probe"] = probe
     kernel.devices.save()
-    check("device registry persisted", "phone" in json.loads(
-        kernel.devices.path.read_text(encoding="utf-8"))["devices"][1]["id"] or True)
+    saved = json.loads(kernel.devices.path.read_text(encoding="utf-8"))
+    check("device registry persisted", "probe" in [d["id"] for d in saved["devices"]],
+          str([d["id"] for d in saved["devices"]]))
+    kernel.devices.devices.pop("probe", None)
+    kernel.devices.save()
     check("remote config brake engaged",
-          "disabled in config" in kernel.devices.cmd_config(["phone", "app", "restart"]))
+          "disabled in config" in kernel.devices.cmd_config(["probe", "app", "restart"]))
+    check("remote config is off by default",
+          kernel.devices.config.get("devices.allow_remote_config") is False)
+    # Regression: an earlier version of this suite wrote a "phone" fixture into
+    # the *live* registry and a pre-selftest snapshot committed it. That entry was
+    # a verbatim clone of the host entry - same label, kind, os, status, notes -
+    # differing only in id and endpoint, and the endpoint (192.168.1.9:8770) was
+    # unreachable and not this machine. A trusted host twin pointing at a remote
+    # endpoint is exactly the shape that must never reappear.
+    live_path = REPO_ROOT / "data" / "devices.json"
+    live_devices = (json.loads(live_path.read_text(encoding="utf-8"))
+                    if live_path.is_file() else {"devices": []})
+    live_ids = [d.get("id") for d in live_devices.get("devices", [])]
+    twins = [d.get("id") for d in live_devices.get("devices", [])
+             if d.get("kind") == "host" and d.get("endpoint")]
+    check("no phantom host twin in the live registry", not twins, str(twins))
+    check("live registry holds only the local device", live_ids == ["local"], str(live_ids))
     check("daemon status available", "BackgroundDaemon" in kernel.daemon.status())
 
     print("\n== control bridge ==")
