@@ -443,6 +443,38 @@ class JarvisKernel:
         lines.append(self.agents.describe())
         return "\n".join(lines)
 
+    # --------------------------------------------------------------- agents
+    # AgentRegistry.add/remove existed but nothing user-facing could reach them,
+    # so the runtime team could only be assembled at boot. These three make the
+    # registry reachable from the REPL, using Agent.spawn so creation and
+    # registration stay one step and the audit record is not bypassed.
+    def agent_add(self, args: list[str]) -> str:
+        if len(args) < 2:
+            return "Usage: agent add <name> <role>"
+        name, role = args[0], args[1]
+        if self.agents.get(name) is not None:
+            return (f"agent '{name}' is already registered - "
+                    f"remove it first with: agent remove {name}")
+        # The planner role is fed self.task_manager (see default_team), and the
+        # tools/memory/llm handles are the same live instances the team uses.
+        agent = Agent.spawn(name, role, self.agents,
+                            tools=self.tools, memory=self.memory,
+                            planner=self.task_manager, llm=self.llm,
+                            config=self.config, audit=self.audit)
+        return (f"Registered agent '{agent.name}' [{agent.role}] as {agent.id}. "
+                f"{len(self.agents.names())} agent(s) live.")
+
+    def agent_remove(self, args: list[str]) -> str:
+        if not args:
+            return "Usage: agent remove <name>"
+        name = args[0]
+        if not self.agents.remove(name):
+            return f"no such agent '{name}'"
+        return f"Removed agent '{name}'. {len(self.agents.names())} agent(s) live."
+
+    def agent_list(self) -> str:
+        return self.agents.describe()
+
     def learn(self, text: str) -> Any:
         if self.gate is not None and not self.gate.approve(
             "self_learn", f"Record a lesson for permanent memory?\n  {text[:200]}",

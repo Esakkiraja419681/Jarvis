@@ -1,15 +1,16 @@
-# --- local translation model cache (multi-GB, re-downloadable) ---
-# --- persistent memory / audit (never committed; also excluded by MEMORY_GLOBS
-# --- python bytecode caches ---
-# --- scratch: editors / tooling / editors' backups ---
-# --- scratch: runtime logs & one-off test artefacts ---
-# --- scratch: selftest.py output ---
-# --- secrets / local-only config ---
-# --- volatile runtime state ---
-# compiled artefacts of every module land in git history each time.
-# in jarvis_os/selfupdate.py, this is defence in depth) ---
+# Byte-compiled output. Python writes these beside every module, so without
+# Editor, tooling and patch leftovers.
+# MEMORY_GLOBS in jarvis_os/selfupdate.py, so this is defence in depth.
+# Offline model caches: multi-GB and re-downloadable, never committed.
+# Persistent memory and audit ledger, never committed. Also excluded by
+# Runtime logs and one-off test artefacts.
+# Scratch directories.
+# Secrets and local-only config.
+# Volatile runtime state.
 # machine-local agent/tooling config, not part of the shipped kernel
-# selftest.py snapshots the whole worktree on every run, so without these the
+# selftest.py output. It snapshots the whole worktree on every run, so without
+# them each run drops compiled artefacts into git history.
+# these the snapshot would sweep its own output back into the commit.
 *$py.class
 *.bak
 *.key

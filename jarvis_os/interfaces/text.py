@@ -130,6 +130,8 @@ class TextCommandInterface:
             ("learn <text>", "record a durable lesson"),
             ("skill add <name> <tool>", "register a new tool at runtime"),
             ("skill list", "list registered skills and dynamic tools"),
+            ("agent add <name> <role>", "register a new agent at runtime"),
+            ("agent list", "list every live agent and its tool grants"),
             ("update <target>", "self-update pipeline with git versioning"),
             ("approve <category>", "set a category to require approval"),
             ("deny <category>", "flip a permission decision in the audit record"),
@@ -211,6 +213,17 @@ class TextCommandInterface:
             self.plain(self.kernel.skill_list())
         else:
             self.say("Usage: skill add <name> <module:function> | skill list")
+
+    def cmd_agent(self, args: list[str]) -> None:
+        sub = (args[0].lower() if args else "list")
+        if sub == "add":
+            self.plain(self.kernel.agent_add(args[1:]))
+        elif sub == "remove":
+            self.plain(self.kernel.agent_remove(args[1:]))
+        elif sub == "list":
+            self.plain(self.kernel.agent_list())
+        else:
+            self.say("Usage: agent add <name> <role> | agent remove <name> | agent list")
 
     def cmd_update(self, args: list[str]) -> None:
         self.plain(self.kernel.self_update.describe_target(args[0] if args else None))
@@ -342,6 +355,7 @@ TextCommandInterface.COMMANDS = {
     "evolve": TextCommandInterface.cmd_evolve,
     "learn": TextCommandInterface.cmd_learn,
     "skill": TextCommandInterface.cmd_skill,
+    "agent": TextCommandInterface.cmd_agent, "agents": TextCommandInterface.cmd_agent,
     "update": TextCommandInterface.cmd_update,
     "approve": TextCommandInterface.cmd_approve,
     "deny": TextCommandInterface.cmd_deny,

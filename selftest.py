@@ -300,6 +300,43 @@ def main() -> int:
     agent = kernel.agents.get("coder")
     check("default team present", agent is not None and len(kernel.agents.names()) == 7)
 
+    # Runtime agent registration has to be reachable from the REPL, not just
+    # from boot-time default_team(): AgentRegistry.add/remove used to have no
+    # user-facing caller at all.
+    text_iface = kernel.text_iface
+    check("agent command exposed in REPL",
+          "agent" in text_iface.COMMANDS and "agents" in text_iface.COMMANDS)
+    before = len(kernel.agents.names())
+    text_iface.dispatch("agent list")
+    check("agent list lists the default team",
+          "orchestrator" in kernel.agent_list() and "reviewer" in kernel.agent_list())
+    text_iface.dispatch("agent add scribe archivist")
+    added = kernel.agents.get("scribe")
+    check("agent add registers at runtime",
+          added is not None and added.role == "archivist"
+          and len(kernel.agents.names()) == before + 1,
+          f"{before} -> {len(kernel.agents.names())}")
+    check("agent add agent is functional (has live tool registry)",
+          added is not None and added.tools is kernel.tools)
+    check("duplicate agent add refused",
+          "already registered" in kernel.agent_add(["scribe", "archivist"]))
+    check("agent remove unregisters",
+          "Removed agent" in kernel.agent_remove(["scribe"])
+          and kernel.agents.get("scribe") is None
+          and len(kernel.agents.names()) == before)
+    check("agent remove unknown reports cleanly",
+          "no such agent" in kernel.agent_remove(["ghost"]))
+    check("agent add usage on missing role", "Usage: agent add" in kernel.agent_add(["solo"]))
+    spoken: list[str] = []
+    real_say = text_iface.say
+    text_iface.say = lambda msg, **kw: spoken.append(str(msg))  # type: ignore[method-assign]
+    try:
+        text_iface.dispatch("agent wat")
+    finally:
+        text_iface.say = real_say  # type: ignore[method-assign]
+    check("agent subcommand misuse shows usage",
+          any("Usage: agent add" in m for m in spoken))
+
     print("\n== language layer ==")
     check("Tamil detected", kernel.language.detect("நீங்கள் எப்படி இருக்கிறீர்கள்").language == "ta")
     check("Tamil name resolved",
