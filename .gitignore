@@ -33,6 +33,7 @@ data/langcache/
 data/lessons.jsonl
 data/memory.db
 data/memory.db-*
+data/models/
 data/selftest_run*.err
 data/selftest_run*.log
 data/smoke.txt
