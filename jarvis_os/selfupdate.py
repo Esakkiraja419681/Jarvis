@@ -117,16 +117,45 @@ class SelfUpdate:
             self.audit.record("self_update", "init", "ok", {"root": str(self.root)})
         return UpdateResult(True, "git repository initialised with a baseline commit")
 
+    _MEMORY_HEADER = "# Persistent memory and audit ledger, never committed."
+
     def _protect_memory(self) -> None:
-        """Ensure memory can never be committed or reverted."""
+        """Ensure memory can never be committed or reverted.
+
+        Append-only, and a no-op once every pattern is present.
+
+        This used to collect every line into a ``set`` and rewrite the file
+        ``sorted()``. That destroyed blank lines and comment placement on every
+        single call - and because ``#`` sorts ahead of every glob, it stacked all
+        13 comments at the top of the file. It ran from ``init()``, so every
+        snapshot (including the selftest's own) re-mangled the file, which made
+        any comment fix revert on the next run.
+
+        Only a *missing* pattern has to be added, so nothing else is touched.
+        Appending also leans on git's last-match-wins rule: the memory patterns
+        land last and therefore outrank any earlier negation or re-inclusion.
+        """
         ignore = self.root / ".gitignore"
-        existing = ignore.read_text(encoding="utf-8").splitlines() if ignore.is_file() else []
-        lines = {l.strip() for l in existing if l.strip()}
-        for pattern in MEMORY_GLOBS:
-            lines.add(pattern)
-        for path in self.config.get("self_update.preserve_paths", []) or []:
-            lines.add(str(path))
-        ignore.write_text("\n".join(sorted(lines)) + "\n", encoding="utf-8")
+        existing = ignore.read_text(encoding="utf-8").splitlines() \
+            if ignore.is_file() else []
+        # Only a real rule can satisfy the requirement - a comment that happens
+        # to name a pattern is not a rule and must not count as present.
+        present = {l.strip() for l in existing
+                   if l.strip() and not l.strip().startswith("#")}
+        wanted = [*MEMORY_GLOBS,
+                  *(str(p) for p
+                    in (self.config.get("self_update.preserve_paths", []) or []))]
+        # dict.fromkeys keeps the caller's order while dropping repeats.
+        missing = [p for p in dict.fromkeys(wanted) if p and p not in present]
+        if not missing:
+            return  # byte-identical no-op: the file is never rewritten
+        lines = list(existing)
+        if not any(l.strip() == self._MEMORY_HEADER for l in lines):
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.append(self._MEMORY_HEADER)
+        lines.extend(missing)
+        ignore.write_text("\n".join(lines).rstrip("\n") + "\n", encoding="utf-8")
 
     def _configured(self) -> bool:
         return bool(self.config.get("evolution.self_update_enabled", False))

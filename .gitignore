@@ -1,17 +1,8 @@
 # Byte-compiled output. Python writes these beside every module, so without
-# Editor, tooling and patch leftovers.
-# MEMORY_GLOBS in jarvis_os/selfupdate.py, so this is defence in depth.
-# Offline model caches: multi-GB and re-downloadable, never committed.
-# Persistent memory and audit ledger, never committed. Also excluded by
-# Runtime logs and one-off test artefacts.
-# Scratch directories.
-# Secrets and local-only config.
-# Volatile runtime state.
-# machine-local agent/tooling config, not part of the shipped kernel
-# selftest.py output. It snapshots the whole worktree on every run, so without
 # them each run drops compiled artefacts into git history.
-# these the snapshot would sweep its own output back into the commit.
 *$py.class
+
+# Editor, tooling and patch leftovers.
 *.bak
 *.key
 *.orig
@@ -19,19 +10,34 @@
 *.rej
 *.tmp
 *~
+
 .scratch/
 __pycache__/
+
+# Secrets and local-only config.
 config.json
+
+# Runtime logs and one-off test artefacts.
 data/**/*.log
+
+# Volatile runtime state.
 data/*.pid
+
+# selftest.py output. It snapshots the whole worktree on every run, so without
+# these the snapshot would sweep its own output back into the commit.
 data/.selftest_baseline.json
 data/.selftest_scratch/
+
+# Persistent memory and audit ledger, never committed. Also excluded by
+# MEMORY_GLOBS in jarvis_os/selfupdate.py, so this is defence in depth.
 data/actions.jsonl
 data/audit.db*
 data/audit_ledger.jsonl
 data/control.token
 data/heartbeat.json
 data/jarvis_daemon.log
+
+# Offline model caches: multi-GB and re-downloadable, never committed.
 data/langcache/
 data/lessons.jsonl
 data/memory.db
@@ -42,7 +48,11 @@ data/selftest_run*.log
 data/smoke.txt
 data/vectors.json
 data/vectors.json.tmp
+
+# machine-local agent/tooling config, not part of the shipped kernel
 opencode.json
+
+# Scratch directories.
 scratch/
 temp/
 tmp/

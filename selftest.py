@@ -35,6 +35,7 @@ from jarvis_os.daemon import BackgroundDaemon, DaemonState
 from jarvis_os.kernel import JarvisKernel
 from jarvis_os.language import UniversalLanguageLayer
 from jarvis_os.permissions import PermissionGate
+from jarvis_os.selfupdate import MEMORY_GLOBS, SelfUpdate
 from jarvis_os.sandbox import PythonSandbox, SandboxError
 
 PASS, FAIL = [], []
@@ -546,6 +547,81 @@ def _run(sandbox: Path) -> int:
     check("memory not tracked by git", "memory.db" not in tracked)
     snap = kernel.self_update.snapshot("selftest")
     check("snapshot taken", snap is not None)
+
+    # Regression: _protect_memory() used to collect every line into a set and
+    # rewrite the file sorted(). That deleted blank lines and comment placement,
+    # and because '#' sorts ahead of every glob it stacked all 13 comments at the
+    # top of the file. init() calls it, so every snapshot - this suite's own
+    # included - re-mangled the real .gitignore. It must now be append-only and
+    # idempotent. Every case below runs against a throwaway root, so the
+    # repository's own .gitignore is never a test subject.
+    _su_scratch = Path(tempfile.mkdtemp(prefix="jarvis-gitignore-"))
+    try:
+        # A fully protected file must come back byte-identical.
+        _real_ignore = (kernel.config.root / ".gitignore").read_text(encoding="utf-8")
+        _real_dir = _su_scratch / "protected"
+        _real_dir.mkdir(parents=True, exist_ok=True)
+        _real_copy = _real_dir / ".gitignore"
+        _real_copy.write_text(_real_ignore, encoding="utf-8")
+        _su_real = SelfUpdate(kernel.config, root=_real_dir)
+        _su_real._protect_memory()
+        _real_once = _real_copy.read_text(encoding="utf-8")
+        _su_real._protect_memory()
+        _real_twice = _real_copy.read_text(encoding="utf-8")
+        check("protect_memory is idempotent", _real_once == _real_twice)
+        check("protect_memory leaves a protected file byte-identical",
+              _real_once == _real_ignore,
+              "appending nothing must not rewrite a single byte")
+        check("protect_memory preserved blank lines",
+              _real_once.count("\n\n") == _real_ignore.count("\n\n"),
+              f"{_real_once.count(chr(10) * 2)} vs {_real_ignore.count(chr(10) * 2)}")
+        _comment_lines = [l for l in _real_once.splitlines() if l.strip().startswith("#")]
+        check("protect_memory preserved all 13 comments",
+              len(_comment_lines) == 13, str(len(_comment_lines)))
+        check("protect_memory preserved comment placement",
+              "# Secrets and local-only config." in _real_once
+              and _real_once.index("# Secrets and local-only config.")
+              < _real_once.index("\nconfig.json"),
+              "each comment must still head its own rule")
+
+        # A file missing the memory patterns gets exactly them appended, once.
+        _mini_dir = _su_scratch / "bare"
+        _mini_dir.mkdir(parents=True, exist_ok=True)
+        _mini = _mini_dir / ".gitignore"
+        _before = ("# Byte-compiled output.\n"
+                   "*$py.class\n"
+                   "\n"
+                   "# Secrets and local-only config.\n"
+                   "config.json\n")
+        _mini.write_text(_before, encoding="utf-8")
+        _su_mini = SelfUpdate(kernel.config, root=_mini_dir)
+        _su_mini._protect_memory()
+        _appended = _mini.read_text(encoding="utf-8")
+        _su_mini._protect_memory()
+        _appended_twice = _mini.read_text(encoding="utf-8")
+        check("protect_memory is idempotent when appending",
+              _appended == _appended_twice)
+        check("protect_memory appended without touching existing bytes",
+              _appended.startswith(_before),
+              "existing lines must never be reordered, deduped or rewritten")
+        check("protect_memory added the header exactly once",
+              _appended.count(SelfUpdate._MEMORY_HEADER) == 1,
+              str(_appended.count(SelfUpdate._MEMORY_HEADER)))
+        _rules_now = {l.strip() for l in _appended.splitlines()
+                      if l.strip() and not l.strip().startswith("#")}
+        _still_missing = [p for p in MEMORY_GLOBS if p not in _rules_now]
+        check("every memory glob is present after appending",
+              not _still_missing, str(_still_missing))
+        check("no pre-existing rule was dropped",
+              all(p in _rules_now for p in ("*$py.class", "config.json")),
+              str(sorted(_rules_now)))
+        check("appended rules sit under the header",
+              _appended.index(SelfUpdate._MEMORY_HEADER)
+              < _appended.index("data/memory.db"))
+    finally:
+        shutil.rmtree(_su_scratch, ignore_errors=True)
+    check("gitignore scratch dirs cleaned up",
+          not any(Path(tempfile.gettempdir()).glob("jarvis-gitignore-*")))
 
     print("\n== evolution engine ==")
     check("propose phase enabled", kernel.evolve_engine.phase_enabled("propose"))
