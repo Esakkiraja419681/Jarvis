@@ -18,6 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 REPO_ROOT = Path(__file__).resolve().parent
 
+# The assertions below record Tamil strings, and the default Windows code page
+# (cp1252) cannot represent them: printing one degrades it to a row of '?' and
+# hides which word was actually tested. The streams are switched to UTF-8 with
+# replacement before check() can write anything.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        # A captured or non-TextIOBase stream has nothing to reconfigure, and
+        # losing the guard must never stop the suite from running.
+        pass
+
 from jarvis_os.config import Config
 from jarvis_os.kernel import JarvisKernel
 from jarvis_os.permissions import PermissionGate

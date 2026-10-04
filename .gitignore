@@ -8,6 +8,7 @@
 # --- volatile runtime state ---
 # compiled artefacts of every module land in git history each time.
 # in jarvis_os/selfupdate.py, this is defence in depth) ---
+# machine-local agent/tooling config, not part of the shipped kernel
 # selftest.py snapshots the whole worktree on every run, so without these the
 *$py.class
 *.bak
@@ -39,7 +40,6 @@ data/selftest_run*.log
 data/smoke.txt
 data/vectors.json
 data/vectors.json.tmp
-# machine-local agent/tooling config, not part of the shipped kernel
 opencode.json
 scratch/
 temp/
