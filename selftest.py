@@ -418,16 +418,38 @@ def main() -> int:
 
     # As a separate watchdog process the Overseer must learn which run it is
     # watching. Comparing against its own pid would never match, and every
-    # heartbeat would look foreign.
+    # heartbeat would look foreign. The adopted pid must be a process that is
+    # actually alive: the parent of this test run is live and is not this
+    # process, which is precisely the situation the watchdog is written for.
     watchdog = OverseerAgenticOS(config)
-    foreign = {"ts": time.time(), "pid": 424242, "cycles": 1}
+    watched_pid = os.getppid()
+    foreign = {"ts": time.time(), "pid": watched_pid, "cycles": 1}
     watchdog.adopt_observed_pid(foreign)
     check("watchdog adopts the supervised pid",
-          watchdog.supervised_pid() == 424242, str(watchdog.supervised_pid()))
+          watchdog.supervised_pid() == watched_pid, str(watchdog.supervised_pid()))
     check("watchdog recognises the run it watches",
           watchdog.heartbeat_is_current(foreign) is True)
     check("watchdog still rejects a foreign heartbeat",
-          watchdog.heartbeat_is_current(dict(foreign, pid=515151)) is False)
+          watchdog.heartbeat_is_current(dict(foreign, pid=watched_pid + 1)) is False)
+
+    # Regression: the heartbeat file outlives the run that wrote it, so adopting
+    # a pid that is no longer alive laundered that leftover into proof of a stall
+    # and isolated a layer milliseconds after boot. A dead pid must be refused,
+    # however healthy the heartbeat next to it looks.
+    dead_watchdog = OverseerAgenticOS(config)
+    dead_watchdog.adopt_observed_pid({"ts": time.time(), "pid": 999999, "cycles": 1})
+    check("watchdog refuses to adopt a dead pid",
+          dead_watchdog._observed_pid is None, str(dead_watchdog._observed_pid))
+    check("dead-pid heartbeat is not read as the supervised run",
+          dead_watchdog.heartbeat_is_current(
+              {"ts": time.time(), "pid": 999999, "cycles": 1}) is False)
+    # ...and the end-to-end path that actually failed in production: scan()
+    # adopts before it judges, so a stale leftover must not fault on boot.
+    fresh_watchdog = OverseerAgenticOS(config)
+    stale_boot = kernel.overseer.stall_fault(
+        {"ts": time.time() - 90000, "pid": 999999, "cycles": 1})
+    check("ancient dead-run leftover survives an adopting scan", stale_boot is None,
+          str(stale_boot))
 
     # Regression: isolation must record which incident caused it, for every
     # layer - only "permission" used to pass the id and the rest wrote "".
