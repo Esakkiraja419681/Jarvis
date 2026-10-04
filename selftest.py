@@ -31,6 +31,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from jarvis_os.config import Config
+from jarvis_os.daemon import BackgroundDaemon, DaemonState
 from jarvis_os.kernel import JarvisKernel
 from jarvis_os.permissions import PermissionGate
 from jarvis_os.sandbox import PythonSandbox, SandboxError
@@ -667,6 +668,70 @@ def _run(sandbox: Path) -> int:
     check("no phantom host twin in the live registry", not twins, str(twins))
     check("live registry holds only the local device", live_ids == ["local"], str(live_ids))
     check("daemon status available", "BackgroundDaemon" in kernel.daemon.status())
+
+    # Regression: recall/attach must be continuous with the running session.
+    # attach() used to call text_iface.start() unconditionally, so recalling from
+    # a live prompt nested a second input() loop inside the running one, and a
+    # recall with no bound handle just told the operator to give up. It now
+    # reuses the kernel this process already holds - no reboot, memory intact.
+    #
+    # The daemon is simulated rather than really started on purpose: start()
+    # spawns a detached `python jarvis.py`, which would boot a second kernel
+    # against the *live* config.json and write into live data/, breaking the very
+    # guarantee this suite asserts. A BackgroundDaemon rooted in the throwaway
+    # sandbox, claiming liveness with this process's own pid, exercises the same
+    # attach() code path with no side effect outside the sandbox.
+    probe_daemon = BackgroundDaemon(config=kernel.config, gate=kernel.gate,
+                                    audit=kernel.audit, root=sandbox)
+    probe_daemon.state = DaemonState(pid=os.getpid(), started_at=time.time(),
+                                     mode="background", entry=str(probe_daemon.entry))
+    probe_daemon.save()
+    check("simulated daemon reports alive", probe_daemon.alive())
+    probe_daemon.bind_kernel(kernel)
+
+    boots_before = kernel.memory.stats.get("boots", 0)
+    kernel.memory.remember("daemon reattach marker", kind="preference", importance=0.9)
+    memories_written = kernel.memory.stats.get("memories", 0)
+
+    # A foreground session is live, then closes; recall must handle both.
+    starts: list[int] = []
+    said: list[str] = []
+    real_start = kernel.text_iface.start
+    real_say = kernel.text_iface.say
+    kernel.text_iface.start = lambda: starts.append(1)
+    kernel.text_iface.say = lambda text, *a, **k: said.append(str(text))
+    try:
+        kernel.text_iface.running = True
+        mid = probe_daemon.recall()
+        check("mid-session recall does not restart the prompt loop", not starts, str(starts))
+        check("mid-session recall reports a reattach", "Reattached" in mid, mid[:80])
+        check("mid-session recall keeps the same kernel", probe_daemon._kernel is kernel)
+        kernel.text_iface.running = False
+        cold = probe_daemon.recall()
+        check("cold recall starts the loop exactly once", len(starts) == 1, str(starts))
+        # The cold path announces the reattach through say(); its return value is
+        # only spoken once the operator leaves the loop again.
+        check("cold recall announces the reattach",
+              any("Reattached" in m for m in said), " | ".join(said)[:120])
+    finally:
+        kernel.text_iface.start = real_start
+        kernel.text_iface.say = real_say
+        kernel.text_iface.running = False
+
+    check("reattach did not reboot the kernel",
+          kernel.memory.stats.get("boots", 0) == boots_before,
+          f"{boots_before} -> {kernel.memory.stats.get('boots')}")
+    check("reattach kept memory intact",
+          kernel.memory.stats.get("memories", 0) >= memories_written,
+          f"{memories_written} -> {kernel.memory.stats.get('memories')}")
+    check("attach counted the continuous session", probe_daemon._attachments == 2,
+          str(getattr(probe_daemon, "_attachments", None)))
+
+    # With no handle bound the reply must still say how to get one, not dead-end.
+    orphan = BackgroundDaemon(config=kernel.config, root=sandbox)
+    orphan_msg = orphan.attach([])
+    check("unbound handle explains how to reattach",
+          "python jarvis.py" in orphan_msg, orphan_msg[:90])
 
     print("\n== control bridge ==")
     kernel.control.register("smoke_proc", [sys.executable, "-c", "import time;time.sleep(30)"],

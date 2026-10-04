@@ -224,24 +224,43 @@ class BackgroundDaemon:
         return self.attach(args or [])
 
     def attach(self, args: list[str]) -> str:
-        """Interactive front-end onto the already-running daemon."""
-        from .interfaces.text import TextCommandInterface
+        """Reattach the foreground to the kernel this process already holds.
 
+        A mid-session recall and a cold ``python jarvis.py --attach`` are the same
+        operation, and neither may boot anything: the kernel bound at construction
+        is reused, so memory is not re-read from disk and the boot count does not
+        move. When a foreground session is already live the interactive loop is
+        left strictly alone - calling ``start()`` again from inside it nests a
+        second ``input()`` loop within the running one and prints a second banner
+        mid-conversation.
+        """
         self.load()
         if not self.alive():
             return "BackgroundDaemon is not running. Start it with: background start"
         kernel = getattr(self, "_kernel", None)
         if kernel is None:
-            return ("I am running in the background, Sir, but this foreground window has no "
-                    "kernel handle attached. Run 'run' from the background process instead, "
-                    "or use: python jarvis.py --attach")
-        kernel.text_iface.running = True
-        kernel.text_iface.banner()
-        kernel.text_iface.prompt = "jarvis(fg)> "
-        kernel.text_iface.say(
-            f"I am back in the foreground. Background instance pid {self.state.pid} "
-            f"is still serving the background loop.")
-        kernel.text_iface.start()
+            return ("No kernel handle is bound to this process, Sir. Recall from a session "
+                    "started with 'python jarvis.py', or attach a cold one with: "
+                    "python jarvis.py --attach")
+        iface = kernel.text_iface
+        stats = getattr(kernel.memory, "stats", None) or {}
+        boots = stats.get("boots", 0)
+        self._attachments = getattr(self, "_attachments", 0) + 1
+
+        if getattr(iface, "running", False):
+            # Already in the foreground: same kernel, same loop, nothing restarted.
+            iface.prompt = "jarvis(fg)> "
+            return (f"Reattached to the live session, Sir - same kernel, {boots} boot(s), "
+                    f"memory untouched, nothing restarted. Background instance pid "
+                    f"{self.state.pid} keeps serving the loop.")
+
+        iface.running = True
+        iface.banner()
+        iface.prompt = "jarvis(fg)> "
+        iface.say(f"I am back in the foreground, Sir. Reattached to the live kernel "
+                  f"({boots} boot(s)) - nothing was restarted and memory is intact. "
+                  f"Background instance pid {self.state.pid} keeps serving the loop.")
+        iface.start()
         return "Foreground session ended; the background instance keeps running."
 
     def bind_kernel(self, kernel: Any) -> None:

@@ -236,8 +236,13 @@ snapshot or `git reset --hard` can never destroy them.
 
 ## Known limits
 
-- `background attach` recreates the command surface rather than reattaching to a
-  live terminal multiplexer session.
+- `background attach` / `background recall` reattach to the kernel the current
+  process already holds, so it is one continuous session: nothing reboots, memory
+  is not re-read from disk, and the boot count does not move. Recalling from a live
+  prompt no longer restarts the prompt loop. This is continuity within one OS
+  process - the detached background daemon is a *separate* process, so
+  `python jarvis.py --attach` from a cold shell still boots its own kernel to talk
+  to, and cannot share the daemon's in-memory session across the process boundary.
 - The software factory generates and supervises Python programs; wrapping
   arbitrary existing binaries is limited.
 - `--overseer` is a separate process you launch; the main kernel also runs an
