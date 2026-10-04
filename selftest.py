@@ -419,18 +419,26 @@ def main() -> int:
     # As a separate watchdog process the Overseer must learn which run it is
     # watching. Comparing against its own pid would never match, and every
     # heartbeat would look foreign. The adopted pid must be a process that is
-    # actually alive: the parent of this test run is live and is not this
-    # process, which is precisely the situation the watchdog is written for.
-    watchdog = OverseerAgenticOS(config)
-    watched_pid = os.getppid()
-    foreign = {"ts": time.time(), "pid": watched_pid, "cycles": 1}
-    watchdog.adopt_observed_pid(foreign)
-    check("watchdog adopts the supervised pid",
-          watchdog.supervised_pid() == watched_pid, str(watchdog.supervised_pid()))
-    check("watchdog recognises the run it watches",
-          watchdog.heartbeat_is_current(foreign) is True)
-    check("watchdog still rejects a foreign heartbeat",
-          watchdog.heartbeat_is_current(dict(foreign, pid=watched_pid + 1)) is False)
+    # genuinely alive, so this spawns one on purpose: using the test's own parent
+    # would be unreliable, because a detached runner may already have exited by
+    # the time this runs.
+    import subprocess
+    bystander = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        watchdog = OverseerAgenticOS(config)
+        watched_pid = bystander.pid
+        foreign = {"ts": time.time(), "pid": watched_pid, "cycles": 1}
+        watchdog.adopt_observed_pid(foreign)
+        check("watchdog adopts the supervised pid",
+              watchdog.supervised_pid() == watched_pid, str(watchdog.supervised_pid()))
+        check("watchdog recognises the run it watches",
+              watchdog.heartbeat_is_current(foreign) is True)
+        check("watchdog still rejects a foreign heartbeat",
+              watchdog.heartbeat_is_current(dict(foreign, pid=watched_pid + 1)) is False)
+    finally:
+        bystander.kill()
+        bystander.wait(timeout=10)
 
     # Regression: the heartbeat file outlives the run that wrote it, so adopting
     # a pid that is no longer alive laundered that leftover into proof of a stall

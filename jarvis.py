@@ -19,6 +19,18 @@ import argparse
 import sys
 from pathlib import Path
 
+# Jarvis answers in the operator's language, and Tamil is not representable in
+# the default Windows console code page (cp1252). Printing it would raise
+# UnicodeEncodeError and take down the reply mid-print, so the streams are
+# switched to UTF-8 with replacement before anything can write to them.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        # Not a real TextIOBase (a test capture object, or pythonw): nothing to
+        # reconfigure, and losing the guard must never stop Jarvis from starting.
+        pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from jarvis_os.config import Config          # noqa: E402

@@ -12,6 +12,19 @@ import sys
 import time
 from typing import Any, Callable
 
+# Every reply is translated into the operator's language before it is printed,
+# and the default Windows console code page (cp1252) cannot represent Tamil.
+# Without this the first translated reply raises UnicodeEncodeError partway
+# through printing, so the guard goes in before the interface can emit anything.
+# The entry point does the same, because this module is also imported directly.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError, OSError):
+        # A captured or non-TextIOBase stream has nothing to reconfigure, and a
+        # missing guard must never stop the interface from loading.
+        pass
+
 BANNER = r"""
      _                       ____  ____
     | |                     / ___||  _ \
