@@ -447,7 +447,15 @@ def _run(sandbox: Path) -> int:
     _probe.mkdir(parents=True, exist_ok=True)
     (_probe / "config.json").write_text("{}", encoding="utf-8")
     (_probe / "tokenizer.json").write_text("{}", encoding="utf-8")
-    # Sparse: truncate() reserves the size gate without writing 512 MB.
+    # Sparse: truncate() satisfies the size gate without writing the bytes.
+    # The real gate is _MIN_WEIGHT_BYTES (512 MB), but provisioning that much
+    # disk for a test is not the test's business - and on a nearly full volume
+    # truncate() raises ENOSPC instead of staying sparse, which failed the whole
+    # suite on a machine with 240 MB free. Lower the gate for this probe and put
+    # it back afterwards: what matters is a genuine present -> absent transition,
+    # not the specific byte count a real NLLB checkpoint has.
+    _orig_min_bytes = UniversalLanguageLayer._MIN_WEIGHT_BYTES
+    UniversalLanguageLayer._MIN_WEIGHT_BYTES = 4096
     with open(_probe / "model.safetensors", "wb") as _fh:
         _fh.truncate(UniversalLanguageLayer._MIN_WEIGHT_BYTES)
     try:
@@ -556,9 +564,13 @@ def _run(sandbox: Path) -> int:
         check("fallback layer still reports nllb as not ready",
               not _alt._nllb_ready, str(_alt._nllb_ready))
     finally:
+        UniversalLanguageLayer._MIN_WEIGHT_BYTES = _orig_min_bytes
         for _p in (_probe, _aside):
             shutil.rmtree(_p, ignore_errors=True)
     check("fabricated model tree cleaned up", not _probe.exists() and not _aside.exists())
+    check("weight-size gate restored",
+          UniversalLanguageLayer._MIN_WEIGHT_BYTES == _orig_min_bytes,
+          f"{UniversalLanguageLayer._MIN_WEIGHT_BYTES} != {_orig_min_bytes}")
 
     print("\n== software factory ==")
     build = kernel.software.build("hello world greeting program")
