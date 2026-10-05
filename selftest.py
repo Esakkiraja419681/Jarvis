@@ -817,75 +817,112 @@ def _run(sandbox: Path) -> int:
     # at all, and the Overseer was left supervising a pid that had already exited,
     # reading a leftover heartbeat from a dead run. It reported "running: True"
     # while watching nothing.
-    _hb_path = kernel.overseer.heartbeat_path
-    _hb_unlinked = False
+    #
+    # The whole suite runs with features.overseer off (see _run) so that no fault
+    # injection can halt the process mid-test. The refresher is gated on that same
+    # flag, by design - a session nobody is supervising has nothing to beat for -
+    # so the Overseer is switched back on for this block and off again after.
+    _was_overseer = config.feature("overseer", True)
+    config.set_feature("overseer", True)
     try:
-        # Remove any leftover so a stale file cannot make this pass by accident.
-        if _hb_path.exists():
-            _hb_path.unlink()
-            _hb_unlinked = True
+        # The kernel owns its own heartbeat, and that path is the sandboxed one, so
+        # resolve it rather than assuming the Overseer writes anywhere else.
+        _hb_path = Path(kernel.config.resolve(
+            config.get("overseer.heartbeat_path", "data/heartbeat.json")))
+        check("kernel and overseer agree on the heartbeat path",
+              _hb_path == Path(kernel.overseer.heartbeat_path),
+              f"{_hb_path} vs {kernel.overseer.heartbeat_path}")
+        _hb_had_previous = _hb_path.exists()
+        try:
+            # Remove any leftover so a stale file cannot make this pass by accident.
+            if _hb_had_previous:
+                _hb_path.unlink()
+            check("no stale heartbeat to mistake for a fresh one",
+                  not _hb_path.exists(), f"{_hb_path} still present")
 
-        started = kernel.start_heartbeat_refresher()
-        check("heartbeat refresher starts for an interactive session", started)
-        check("heartbeat written immediately, before any command",
-              _hb_path.exists(), f"missing {_hb_path}")
+            started = kernel.start_heartbeat_refresher()
+            check("heartbeat refresher starts for an interactive session", started)
+            check("heartbeat written immediately, before any command",
+                  _hb_path.exists(), f"missing {_hb_path}")
 
-        _first = json.loads(_hb_path.read_text(encoding="utf-8"))
-        check("heartbeat is owned by this process",
-              int(_first.get("pid") or 0) == os.getpid(),
-              f"pid={_first.get('pid')} ours={os.getpid()}")
-        check("repl heartbeat reports interactive, not daemon",
-              _first.get("mode") == "interactive",
-              f"mode={_first.get('mode')!r}")
-        check("fresh heartbeat is not a stall",
-              kernel.overseer.stall_fault(_first) is None)
-        check("overseer accepts the beat as its own",
-              kernel.overseer.heartbeat_is_current(_first))
+            _first = json.loads(_hb_path.read_text(encoding="utf-8"))
+            check("heartbeat is owned by this process",
+                  int(_first.get("pid") or 0) == os.getpid(),
+                  f"pid={_first.get('pid')} ours={os.getpid()}")
+            check("repl heartbeat reports interactive, not daemon",
+                  _first.get("mode") == "interactive",
+                  f"mode={_first.get('mode')!r}")
+            check("fresh heartbeat is not a stall",
+                  kernel.overseer.stall_fault(_first) is None)
+            check("overseer accepts the beat as its own",
+                  kernel.overseer.heartbeat_is_current(_first))
 
-        # The real requirement: it has to keep beating across an idle gap, or the
-        # Overseer will accuse an ordinary pause of being a stall. Compressed by
-        # rewriting the interval rather than by sleeping for 15 seconds.
-        check("beat interval sits inside the stall timeout",
-              kernel._hb_interval < float(config.get("overseer.stall_timeout_seconds", 45)),
-              f"interval={kernel._hb_interval}")
+            # The real requirement: it has to keep beating across an idle gap, or the
+            # Overseer will accuse an ordinary pause of being a stall. Compressed by
+            # rewriting the interval rather than by sleeping for 15 seconds.
+            _stall_cfg = float(config.get("overseer.stall_timeout_seconds", 45))
+            check("beat interval sits inside the stall timeout",
+                  kernel._hb_interval < _stall_cfg,
+                  f"interval={kernel._hb_interval} timeout={_stall_cfg}")
 
-        kernel._hb_interval = 0.05
-        time.sleep(0.4)
-        _second = json.loads(_hb_path.read_text(encoding="utf-8"))
-        check("heartbeat refreshed while idle",
-              float(_second.get("ts") or 0) > float(_first.get("ts") or 0),
-              f"{_first.get('ts')} -> {_second.get('ts')}")
-        check("idle refresh stays inside the stall timeout",
-              kernel.overseer.age(_second)
-              < float(config.get("overseer.stall_timeout_seconds", 45)))
-        check("idle refresh is not a stall fault",
-              kernel.overseer.stall_fault(_second) is None)
-    finally:
-        kernel._hb_interval = 15.0
-        kernel.stop_heartbeat_refresher()
-        check("heartbeat refresher stops cleanly",
-              kernel._hb_thread is None)
+            # The refresher must read the Overseer's actual threshold rather than
+            # assume 45s: a shorter timeout needs a proportionally faster beat,
+            # or a tightened watchdog starts manufacturing stalls.
+            _orig_timeout = kernel.overseer.stall_timeout
+            try:
+                kernel.stop_heartbeat_refresher()
+                kernel.overseer.stall_timeout = 30.0
+                kernel.start_heartbeat_refresher()
+                check("beat interval follows a shorter stall timeout",
+                      kernel._hb_interval <= 30.0 / 3.0 + 1e-6,
+                      f"interval={kernel._hb_interval} expected<={30.0 / 3.0}")
+                kernel.stop_heartbeat_refresher()
+            finally:
+                kernel.overseer.stall_timeout = _orig_timeout
+            kernel.start_heartbeat_refresher()
+
+            kernel._hb_interval = 0.05
+            time.sleep(0.4)
+            _second = json.loads(_hb_path.read_text(encoding="utf-8"))
+            check("heartbeat refreshed while idle",
+                  float(_second.get("ts") or 0) > float(_first.get("ts") or 0),
+                  f"{_first.get('ts')} -> {_second.get('ts')}")
+            check("idle refresh stays inside the stall timeout",
+                  kernel.overseer.age(_second) < _stall_cfg)
+            check("idle refresh is not a stall fault",
+                  kernel.overseer.stall_fault(_second) is None)
+        finally:
+            kernel._hb_interval = 15.0
+            kernel.stop_heartbeat_refresher()
+            check("heartbeat refresher stops cleanly",
+                  kernel._hb_thread is None)
 
     # The loop must not leave a thread behind, and starting twice is a no-op
-    # rather than a second writer racing on the same file.
-    _again = kernel.start_heartbeat_refresher()
-    _first_thread = kernel._hb_thread
-    _dup = kernel.start_heartbeat_refresher()
-    check("a second refresher is refused", _again and not _dup)
-    check("no duplicate heartbeat thread was created",
-          kernel._hb_thread is _first_thread)
-    kernel.stop_heartbeat_refresher()
+        # rather than a second writer racing on the same file.
+        _again = kernel.start_heartbeat_refresher()
+        _first_thread = kernel._hb_thread
+        _dup = kernel.start_heartbeat_refresher()
+        check("a second refresher is refused", _again and not _dup)
+        check("no duplicate heartbeat thread was created",
+              kernel._hb_thread is _first_thread)
+        kernel.stop_heartbeat_refresher()
 
-    # set_mode is what keeps the heartbeat honest about the live process.
-    for _m in ("foreground", "interactive", "daemon"):
-        kernel.set_mode(_m)
-        check(f"mode {_m} recorded", kernel.heartbeat_payload()["mode"] == _m)
-    try:
-        kernel.set_mode("nonsense")
-        check("unknown mode rejected", False, "set_mode accepted 'nonsense'")
-    except ValueError:
-        check("unknown mode rejected", True)
-    kernel.set_mode("foreground")
+        # set_mode is what keeps the heartbeat honest about the live process.
+        for _m in ("foreground", "interactive", "daemon"):
+            kernel.set_mode(_m)
+            check(f"mode {_m} recorded", kernel.heartbeat_payload()["mode"] == _m)
+        try:
+            kernel.set_mode("nonsense")
+            check("unknown mode rejected", False, "set_mode accepted 'nonsense'")
+        except ValueError:
+            check("unknown mode rejected", True)
+        kernel.set_mode("foreground")
+    finally:
+        # Back to the suite-wide setting, so later fault-injection checks run
+        # under the same conditions they were written for.
+        config.set_feature("overseer", _was_overseer)
+        check("overseer feature restored",
+              config.feature("overseer", True) == _was_overseer)
 
     # A repair with no live approval channel must refuse, never escalate.
     # NOTE: drive repair() directly on a halted incident rather than
