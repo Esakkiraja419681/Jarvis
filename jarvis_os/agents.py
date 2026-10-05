@@ -231,7 +231,12 @@ class Agent:
                 topic=f"agent:{self.role}", lesson=f"failed on '{objective[:80]}': {error}",
                 outcome="failure", weight=0.7,
             )
-        return {"ok": False, "agent": self.name, "role": self.role, "error": error}
+        # tools_used is present here too, as an empty list. A failure carries it so the
+        # caller can still tell "this subtask tried no tool" apart from "this
+        # subtask does not report tools", which _invoke_tool's bookkeeping relies
+        # on when it decides whether a planned tool went unexecuted.
+        return {"ok": False, "agent": self.name, "role": self.role, "error": error,
+                "tools_used": []}
 
     # ---------------------------------------------------------------- misc
     def status(self) -> str:

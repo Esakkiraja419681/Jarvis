@@ -62,6 +62,10 @@ class JarvisKernel:
         self.paused = False
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
+        self._hb_thread: threading.Thread | None = None
+        self._hb_stop = threading.Event()
+        self._hb_interval = 0.0
+        self._mode = "foreground"
 
         self._build()
 
@@ -142,7 +146,7 @@ class JarvisKernel:
         # --- cognition ------------------------------------------------------
         self.agents = AgentRegistry(cfg, self.audit)
         self.task_manager = TaskManager(self.agents, self.memory, self.llm,
-                                        cfg, self.audit)
+                                        cfg, self.audit, self.tools)
         self.team = self.agents.default_team(self.tools, self.memory, self.llm,
                                             self.task_manager, cfg, self.audit)
 
@@ -246,7 +250,13 @@ class JarvisKernel:
             "verified_success": self.last_goal is None or self.cycles % 5 == 0,
             "queued": len(self.queue),
             "paused": self.paused,
-            "mode": "daemon" if self.config.feature("background_daemon") else "foreground",
+            # What this process is actually doing, not what it is configured to
+            # be allowed to do. Keying this off the background_daemon feature
+            # flag meant a plain REPL - no loop running, a person typing - still
+            # published "daemon", so the heartbeat misdescribed the live process
+            # and any human or dashboard reading it was misled about what to
+            # expect from this pid.
+            "mode": self._mode,
             "notes": "",
             "memory": self.memory.status(),
         }
@@ -258,6 +268,67 @@ class JarvisKernel:
             self.overseer.write_heartbeat(self.heartbeat_payload())
         except OSError:
             pass
+
+    # ------------------------------------------------- interactive heartbeat
+    # The Overseer supervises this process through data/heartbeat.json, and in
+    # the infinite loop that file is written once per cycle. An interactive REPL
+    # has no cycles: it blocks in input() waiting for a person, sometimes for
+    # minutes. So it never beat at all, and the Overseer - correctly, by its own
+    # rules - refused to supervise it. It read a leftover heartbeat from a dead
+    # run, jarvis_alive() asked the OS about that dead pid, got False, and with
+    # auto_repair armed raised no incident either, because a heartbeat written by
+    # another pid is never evidence that *this* process stalled. The result was a
+    # watchdog that reported "running: True" while supervising nothing.
+    #
+    # A refresher thread is the fix, and a thread rather than a write-per-command
+    # because the stall timeout is 45s while the gap between two commands is
+    # however long the operator takes to type. Beating once per command would go
+    # stale mid-thought and manufacture exactly the stall it was meant to avoid.
+    def set_mode(self, mode: str) -> None:
+        """Record what this process is actually doing, for the heartbeat."""
+        if mode not in ("foreground", "interactive", "daemon"):
+            raise ValueError(f"unknown mode: {mode}")
+        self._mode = mode
+
+    def start_heartbeat_refresher(self) -> bool:
+        """Beat for as long as an interactive session waits for input.
+
+        Writes one heartbeat immediately so the Overseer has a live target before
+        the first prompt is printed, then refreshes on a timer. Returns False
+        when the overseer is disabled or a refresher is already running.
+        """
+        if not self.config.feature("overseer", True):
+            return False
+        with self._lock:
+            if self._hb_thread is not None and self._hb_thread.is_alive():
+                return False
+            # Comfortably inside the Overseer's stall threshold, so an ordinary
+            # pause is never mistaken for a hang.
+            timeout = float(getattr(self.overseer, "stall_timeout", 45) or 45)
+            self._hb_interval = max(1.0, min(timeout / 3.0, 15.0))
+            self._hb_stop.clear()
+            self._write_heartbeat()
+            self._hb_thread = threading.Thread(
+                target=self._heartbeat_refresher_loop,
+                name="jarvis-heartbeat", daemon=True)
+            self._hb_thread.start()
+            return True
+
+    def _heartbeat_refresher_loop(self) -> None:
+        # Event.wait rather than sleep: shutdown sets the event and the thread
+        # wakes at once instead of lingering for the rest of the interval.
+        while not self._hb_stop.wait(self._hb_interval):
+            try:
+                self._write_heartbeat()
+            except Exception:  # noqa: BLE001 - a beat must never kill the session
+                pass
+
+    def stop_heartbeat_refresher(self) -> None:
+        self._hb_stop.set()
+        with self._lock:
+            thread, self._hb_thread = self._hb_thread, None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
 
     # -------------------------------------------------------------- one cycle
     def cycle(self) -> dict[str, Any]:
@@ -310,9 +381,10 @@ class JarvisKernel:
         interval = float(self.config.get("loop.interval_seconds", 5))
         backoff = float(self.config.get("loop.backoff_on_error_seconds", 15))
         max_cycles = int(self.config.get("loop.max_cycles", 0))
+        self.set_mode("daemon")
         self.audit.record("kernel", "loop_start", "ok",
                           {"interval": interval, "pid": os.getpid(),
-                           "mode": "daemon" if self.config.feature("background_daemon") else "foreground"})
+                           "mode": self._mode})
         try:
             while not self.stopped:
                 started = time.time()
@@ -332,6 +404,35 @@ class JarvisKernel:
 
     # -------------------------------------------------------------- execution
     def execute(self, goal: str, source: str = "cli", context: str = "") -> str:
+        output, _ = self.execute_report(goal, source=source, context=context)
+        return self.language.process_outbound(output)
+
+    def enqueue(self, goal: str) -> int:
+        with self._lock:
+            self.queue.append(goal)
+            return len(self.queue)
+
+    # ------------------------------------------------------------- evolution
+    def maybe_evolve(self, focus: str = "") -> str:
+        if not self.config.feature("infinite_loop", True):
+            return "evolution skipped: infinite loop disabled"
+        if not self.config.get("evolution.self_update_enabled", False):
+            return ("self-update is disabled (evolution.self_update_enabled = false). "
+                    "Turn it on with: config evolution.self_update_enabled=true")
+        cycle = self.evolve_engine.run_cycle(focus=focus)
+        return self.evolve_engine._describe(cycle)
+
+    def execute_report(self, goal: str, source: str = "cli", context: str = "") -> tuple[str, dict[str, Any]]:
+        """Execute ``goal`` and hand back the reply plus the DelegationResult.
+
+        ``execute`` is the spoken path: it funnels every result through
+        ``process_outbound``, which translates and prepends the honorific. That
+        is right for the operator and wrong for a caller that needs to branch on
+        the outcome - ``cmd_run`` has to say PARTIAL rather than a confident
+        "Done", and nothing downstream can do that from a translated string.
+        Splitting the result off here keeps one implementation of the work and
+        two honest shapes of the output.
+        """
         self.last_goal = goal
         english, detection = self.language.process_inbound(goal)
         self.audit.record("kernel", "execute", "start",
@@ -356,22 +457,7 @@ class JarvisKernel:
             self.memory.learn_lesson(
                 topic="goal", lesson=f"goal '{goal[:80]}' had failing subtasks",
                 outcome="failure", weight=0.6)
-        return self.language.process_outbound(output)
-
-    def enqueue(self, goal: str) -> int:
-        with self._lock:
-            self.queue.append(goal)
-            return len(self.queue)
-
-    # ------------------------------------------------------------- evolution
-    def maybe_evolve(self, focus: str = "") -> str:
-        if not self.config.feature("infinite_loop", True):
-            return "evolution skipped: infinite loop disabled"
-        if not self.config.get("evolution.self_update_enabled", False):
-            return ("self-update is disabled (evolution.self_update_enabled = false). "
-                    "Turn it on with: config evolution.self_update_enabled=true")
-        cycle = self.evolve_engine.run_cycle(focus=focus)
-        return self.evolve_engine._describe(cycle)
+        return output, result
 
     def evolve(self, report_only: bool = False) -> str:
         if not self.config.phase("propose", True):

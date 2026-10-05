@@ -470,17 +470,75 @@ def _run(sandbox: Path) -> int:
         # can never mask the notice.
         _skip_src = "இன்று மழை பெய்கிறது"
         _skip_out = _bare.translate(_skip_src, "en")
-        check("missing model is reported, not echoed",
-              _skip_out != _skip_src and "translation skipped" in _skip_out,
-              _skip_out[:160])
-        check("missing-model note names nllb",
-              "NLLB model not installed" in _skip_out, _skip_out[:160])
-        check("skip note is honorific-prefixed",
-              _skip_out.startswith(f"{_bare.honorific},"), _skip_out[:160])
-        check("skip note keeps the original text",
-              _skip_src in _skip_out, _skip_out[:160])
-        check("operator reply path does not double the honorific",
-              _bare.prefix(_skip_out) == _skip_out, _skip_out[:160])
+        # The source comes back untouched. A diagnostic is not something to say
+        # to the operator, and translate() is called from inside
+        # process_outbound - so anything it returned was itself a reply. That is
+        # what put "translation skipped: ..." in front of every banner, every
+        # status line and "Goodbye".
+        check("missing model returns the source unchanged",
+              _skip_out == _skip_src, _skip_out[:160])
+        check("skip note never reaches the operator",
+              "translation skipped" not in _skip_out, _skip_out[:160])
+        # It is still recorded, just not spoken. The bare layer was built without
+        # an audit ledger, so it gets the kernel's - that is the ledger a real run
+        # would write to.
+        _bare.audit = kernel.audit
+        _before_lang_events = kernel.audit.count(category="language")
+        _bare.translate("மற்றொரு தமிழ் வரி", "en")
+        _lang_events = kernel.audit.tail(limit=20, category="language")
+        check("a passthrough is recorded in the audit ledger",
+              kernel.audit.count(category="language") > _before_lang_events,
+              f"before={_before_lang_events} after={kernel.audit.count(category='language')}")
+        check("the audit record names the real cause",
+              any("nllb" in str(e.get("detail", "")).lower() for e in _lang_events),
+              str(_lang_events[-1])[:200] if _lang_events else "no event")
+        check("the audit record marks it a passthrough, not a success",
+              any(e.get("decision") == "passthrough" for e in _lang_events),
+              str([e.get("decision") for e in _lang_events])[:200])
+
+        # The reason itself must still name the real cause, or the audit trail
+        # is useless for diagnosing a passthrough.
+        _note = _bare._skip_note("ta", "en", [])
+        check("skip reason still names nllb",
+              "NLLB model not installed" in _note, _note[:160])
+
+        # The regression that matters is the whole operator-facing path. With a
+        # reply language set and no local translator, every utterance had to come
+        # back clean: the banner, the farewell and an unrecognised command.
+        _tamil_cfg = kernel.config
+        _prev_lang = _tamil_cfg.get("language.reply_language", "en")
+        _tamil_cfg.set("language.reply_language", "ta")
+        try:
+            _reply_layer = UniversalLanguageLayer(_tamil_cfg, llm=None)
+            _iface = kernel.text_iface
+            _prev_layer = kernel.language
+            kernel.language = _reply_layer
+
+            _banner = "Jarvis OS online. Ollama is the only permitted AI backend."
+            _goodbye = "Shutting down. Memory preserved."
+            for _label, _text in (("banner", _banner), ("goodbye", _goodbye),
+                                  ("unknown command", "Unknown command: frobnicate")):
+                # say() is the real operator path: process_outbound, not the
+                # language layer called directly.
+                _spoken = _iface.say(_text, translate=True)
+                check(f"{_label} carries no translation skip note",
+                      "translation skipped" not in _spoken, _spoken[:160])
+                check(f"{_label} still gets the honorific",
+                      _spoken.startswith(f"{_iface.kernel.config.honorific()},"),
+                      _spoken[:160])
+                check(f"{_label} keeps its own text",
+                      _text.split(":")[0][:24] in _spoken or _text[:24] in _spoken,
+                      _spoken[:160])
+
+            # And the reverse: a greeting in Tamil must not be mangled either.
+            _greet = _iface.say("வணக்கம்", translate=True)
+            check("tamil greeting round-trips without a note",
+                  "translation skipped" not in _greet, _greet[:160])
+            check("tamil greeting stays renderable",
+                  "வணக்கம்" in _greet, _greet[:160])
+        finally:
+            _tamil_cfg.set("language.reply_language", _prev_lang)
+            kernel.language = _prev_layer
 
         # An alternate backend that is available must be used before giving up.
         class _StubReply:
@@ -753,6 +811,82 @@ def _run(sandbox: Path) -> int:
           any(e["actor"] == "overseer" for e in kernel.audit.tail(limit=80)))
     kernel.overseer.write_heartbeat(kernel.heartbeat_payload())
 
+    print("\n== repl heartbeat ==")
+    # Regression: the infinite loop beats once per cycle, but an interactive REPL
+    # has no cycles - it blocks in input() while a person thinks. So it never beat
+    # at all, and the Overseer was left supervising a pid that had already exited,
+    # reading a leftover heartbeat from a dead run. It reported "running: True"
+    # while watching nothing.
+    _hb_path = kernel.overseer.heartbeat_path
+    _hb_unlinked = False
+    try:
+        # Remove any leftover so a stale file cannot make this pass by accident.
+        if _hb_path.exists():
+            _hb_path.unlink()
+            _hb_unlinked = True
+
+        started = kernel.start_heartbeat_refresher()
+        check("heartbeat refresher starts for an interactive session", started)
+        check("heartbeat written immediately, before any command",
+              _hb_path.exists(), f"missing {_hb_path}")
+
+        _first = json.loads(_hb_path.read_text(encoding="utf-8"))
+        check("heartbeat is owned by this process",
+              int(_first.get("pid") or 0) == os.getpid(),
+              f"pid={_first.get('pid')} ours={os.getpid()}")
+        check("repl heartbeat reports interactive, not daemon",
+              _first.get("mode") == "interactive",
+              f"mode={_first.get('mode')!r}")
+        check("fresh heartbeat is not a stall",
+              kernel.overseer.stall_fault(_first) is None)
+        check("overseer accepts the beat as its own",
+              kernel.overseer.heartbeat_is_current(_first))
+
+        # The real requirement: it has to keep beating across an idle gap, or the
+        # Overseer will accuse an ordinary pause of being a stall. Compressed by
+        # rewriting the interval rather than by sleeping for 15 seconds.
+        check("beat interval sits inside the stall timeout",
+              kernel._hb_interval < float(config.get("overseer.stall_timeout_seconds", 45)),
+              f"interval={kernel._hb_interval}")
+
+        kernel._hb_interval = 0.05
+        time.sleep(0.4)
+        _second = json.loads(_hb_path.read_text(encoding="utf-8"))
+        check("heartbeat refreshed while idle",
+              float(_second.get("ts") or 0) > float(_first.get("ts") or 0),
+              f"{_first.get('ts')} -> {_second.get('ts')}")
+        check("idle refresh stays inside the stall timeout",
+              kernel.overseer.age(_second)
+              < float(config.get("overseer.stall_timeout_seconds", 45)))
+        check("idle refresh is not a stall fault",
+              kernel.overseer.stall_fault(_second) is None)
+    finally:
+        kernel._hb_interval = 15.0
+        kernel.stop_heartbeat_refresher()
+        check("heartbeat refresher stops cleanly",
+              kernel._hb_thread is None)
+
+    # The loop must not leave a thread behind, and starting twice is a no-op
+    # rather than a second writer racing on the same file.
+    _again = kernel.start_heartbeat_refresher()
+    _first_thread = kernel._hb_thread
+    _dup = kernel.start_heartbeat_refresher()
+    check("a second refresher is refused", _again and not _dup)
+    check("no duplicate heartbeat thread was created",
+          kernel._hb_thread is _first_thread)
+    kernel.stop_heartbeat_refresher()
+
+    # set_mode is what keeps the heartbeat honest about the live process.
+    for _m in ("foreground", "interactive", "daemon"):
+        kernel.set_mode(_m)
+        check(f"mode {_m} recorded", kernel.heartbeat_payload()["mode"] == _m)
+    try:
+        kernel.set_mode("nonsense")
+        check("unknown mode rejected", False, "set_mode accepted 'nonsense'")
+    except ValueError:
+        check("unknown mode rejected", True)
+    kernel.set_mode("foreground")
+
     # A repair with no live approval channel must refuse, never escalate.
     # NOTE: drive repair() directly on a halted incident rather than
     # handle_fault("permission_violation") - the real path calls halt_jarvis(),
@@ -776,6 +910,150 @@ def _run(sandbox: Path) -> int:
               for e in kernel.audit.tail(limit=5000, category="overseer")))
 
     print("\n== task manager ==")
+    print("\n== goal tool discipline ==")
+    # Regression: the planner prompt's example contained "tools":["web_fetch"], and
+    # a 4B model copies the example rather than filling in the shape. So every
+    # goal it saw inherited web_fetch - including "say hello in Tamil and English",
+    # which was planned as two web searches for the word "hello", answered in
+    # neither language, and still reported success.
+    _plan_goal = "say hello in Tamil and English"
+    _tasks, _plan_strategy = kernel.task_manager.decompose(_plan_goal)
+    check("greeting goal still produces a plan", bool(_tasks),
+          f"strategy={_plan_strategy}")
+    _planned = sorted({t for task in _tasks for t in task.tools})
+    check("greeting plan asks for no tools", _planned == [], f"planned={_planned}")
+    check("greeting plan never names web_fetch",
+          not any("web_fetch" in t for t in _planned), f"planned={_planned}")
+    check("greeting plan produces no invented tools",
+          all(t in (kernel.tools.names() if kernel.tools else []) for t in _planned),
+          f"planned={_planned}")
+
+    # The classifier has to survive the conjunction, and must not swallow a goal
+    # that genuinely needs the outside world.
+    _tm = kernel.task_manager
+    check("classifier accepts a bilingual greeting",
+          _tm._is_self_contained("say hello in Tamil and English"))
+    check("classifier accepts a single greeting",
+          _tm._is_self_contained("hello"))
+    check("classifier accepts a translation request",
+          _tm._is_self_contained("translate this into Tamil"))
+    check("classifier accepts a thanks",
+          _tm._is_self_contained("thank you"))
+    check("classifier rejects a greeting plus a real task",
+          not _tm._is_self_contained("say hello and then fetch the news"))
+    check("classifier rejects a research goal",
+          not _tm._is_self_contained("what is the latest news"))
+    check("classifier rejects an empty goal",
+          not _tm._is_self_contained("   "))
+    check("classifier does not fire on a research plan",
+          not _tm._is_self_contained("research the weather and write a script"))
+
+    # A real tool plan must survive the stripping untouched.
+    _research_tasks, _research_strategy = kernel.task_manager.decompose(
+        "research the weather and write a script")
+    check("research goal still plans", bool(_research_tasks),
+          f"strategy={_research_strategy}")
+
+    # ---- PARTIAL reporting -----------------------------------------------
+    # "no subtask crashed" and "the goal got done" are different claims. A plan
+    # that named tools and ran none has verified nothing, and reporting that as
+    # success is how a half-answered greeting came back as "Done".
+    from jarvis_os.taskmanager import AgentTask, DelegationResult, TaskManager
+
+    _r = DelegationResult(goal="g", planned_tools=["web_fetch"], used_tools=[])
+    check("unexecuted tools make a result partial", _r.partial)
+    check("partial result still reports ok", _r.ok,
+          "no subtask crashed, so ok stays true")
+    _r2 = DelegationResult(goal="g", planned_tools=["web_fetch"],
+                           used_tools=["web_fetch"])
+    check("executed tools are not partial", not _r2.partial)
+    _r3 = DelegationResult(goal="g")
+    check("a plan with no tools is not partial", not _r3.partial)
+    check("to_dict carries the tool evidence",
+          _r.to_dict()["unexecuted_tools"] == ["web_fetch"]
+          and _r.to_dict()["partial"] is True)
+
+    # End to end: force a plan that names a tool no agent can reach, and confirm
+    # execute() flags it partial instead of quietly succeeding.
+    class _ToolBlindAgent:
+        name = "tool-blind"
+        role = "orchestrator"
+
+        def run(self, objective, context="", allow_tools=True):
+            # Never invokes a tool, and says so plainly.
+            return {"ok": True, "agent": self.name, "role": self.role,
+                    "output": f"answered from memory: {objective}",
+                    "tools_used": [], "duration_ms": 1}
+
+    class _BlindRegistry:
+        def __init__(self, agent):
+            self._agent = agent
+
+        def get(self, name):
+            return self._agent
+
+        def find_by_role(self, role):
+            return [self._agent]
+
+    _blind = TaskManager(_BlindRegistry(_ToolBlindAgent()), kernel.memory, None,
+                         kernel.config, kernel.audit, kernel.tools)
+    _real_decompose = _blind.decompose
+    _blind.decompose = lambda goal: ([
+        AgentTask(objective="fetch it", assigned_agent="orchestrator",
+                  tools=["web_fetch"])], "forced")
+    try:
+        _blind_out, _blind_res = _blind.execute(_plan_goal)
+        check("a plan whose tools never ran is partial", _blind_res.partial,
+              f"partial={_blind_res.partial} used={_blind_res.used_tools}")
+        check("the unexecuted tool is named",
+              _blind_res.unexecuted_tools == ["web_fetch"],
+              str(_blind_res.unexecuted_tools))
+        check("execute() still returns the agent's text",
+              "answered from memory" in _blind_out, _blind_out[:160])
+    finally:
+        del _blind.decompose
+
+    # And the operator-facing surface has to say so out loud.
+    _iface = kernel.text_iface
+    _echo = _iface._echo
+    _iface._echo = False
+    _said: list[str] = []
+    _prev_say = _iface.say
+    _iface.say = lambda text, translate=True: (
+        _said.append(text), _prev_say(text, translate=translate))[1]
+    _prev_exec = kernel.task_manager.execute
+    kernel.task_manager.execute = lambda goal, context="", allow_tools=True: (
+        DelegationResult(goal=goal, output="Sir, வணக்கம். Hello.",
+                         planned_tools=["web_fetch"], used_tools=[]))
+    try:
+        _iface.cmd_run(["say", "hello", "in", "Tamil", "and", "English"])
+        _spoken = " ".join(_said)
+        check("run announces PARTIAL when tools did not execute",
+              "PARTIAL" in _spoken, _spoken[:200])
+        check("run names the tool that never ran",
+              "web_fetch" in _spoken, _spoken[:200])
+        check("run still delivers the reply", "வணக்கம்" in _spoken,
+              _spoken[:200])
+    finally:
+        kernel.task_manager.execute = _prev_exec
+        _iface.say = _prev_say
+        _iface._echo = _echo
+
+    _said.clear()
+    kernel.task_manager.execute = lambda goal, context="", allow_tools=True: (
+        DelegationResult(goal=goal, output="all good", ok=False))
+    try:
+        _iface.cmd_run(["do", "something", "impossible"])
+        _spoken = " ".join(_said)
+        check("run announces INCOMPLETE on total failure",
+              "INCOMPLETE" in _spoken, _spoken[:200])
+        check("a total failure is not reported as partial",
+              "PARTIAL" not in _spoken, _spoken[:200])
+    finally:
+        kernel.task_manager.execute = _prev_exec
+        _iface.say = _prev_say
+        _iface._echo = _echo
+
     tasks, strategy = kernel.task_manager.decompose("research the weather and write a script")
     check("decomposition produces subtasks", len(tasks) >= 1, strategy)
     check("final task depends on others",

@@ -5,8 +5,9 @@ attempted in order and every one of them is local:
 
 1. **Argos Translate** - offline OpenNMT models, preferred when installed.
 2. **NLLB-200** via ``transformers`` - offline HuggingFace weights on disk.
-3. **Passthrough** - honest degradation: the text is returned unchanged and
-   Jarvis says so, rather than pretending it translated.
+3. **Passthrough** - honest degradation: the text is returned unchanged, and
+   the reason is recorded in the log and the audit ledger. The operator's
+   reply never carries the diagnostic - see ``translate``.
 
 There is deliberately no network code path here. No Google Translate, no
 DeepL, no cloud MT API - the operator's instruction was explicit.
@@ -380,9 +381,13 @@ class UniversalLanguageLayer:
         return self.translate(text, "en"), detection
 
     # ---------------------------------------------------------- translation
-    # Operator-visible reasons a sentence could not be translated. Echoing the
-    # source silently was the original bug: an untranslated Tamil sentence came
-    # back looking exactly like a successful English translation.
+    # Why a sentence could not be translated, in operator words. These are
+    # diagnostics: they go to the log and the audit ledger and are never part
+    # of a reply. They used to be prepended to the returned text, which meant
+    # that with a reply language the local models could not serve, every single
+    # utterance Jarvis made - banners, status lines, "Goodbye" - arrived with
+    # "translation skipped: ..." welded to the front of it. A diagnostic is not
+    # something to say to the person you are talking to.
     _NOTE_MISSING_NLLB = "translation skipped: NLLB model not installed"
     _NOTE_MISSING_NLLB_NO_FALLBACK = (
         "translation skipped: NLLB model not installed and no fallback "
@@ -408,9 +413,14 @@ class UniversalLanguageLayer:
     def translate(self, text: str, target: str | None = None) -> str:
         """Translate offline, falling through Argos, NLLB and Ollama in order.
 
-        When no backend can serve the pair the source comes back carrying a
-        visible ``[translation skipped: ...]`` note rather than unchanged text,
-        so the operator can never mistake a passthrough for a translation.
+        When no backend can serve the pair the source text is returned
+        unchanged. The reason is written to the log and recorded in the audit
+        ledger, and is deliberately *not* prepended to the text: ``translate``
+        is called from inside ``process_outbound``, so anything it returns is
+        itself an operator reply, and a banner that reads "translation skipped:
+        NLLB model not installed Jarvis OS online" is worse than an untranslated
+        one. Callers that need to know whether a translation really happened ask
+        the audit ledger.
         """
         target = target or self.preferred
         if not text or not text.strip():
@@ -449,11 +459,12 @@ class UniversalLanguageLayer:
             if self.audit:
                 self.audit.record("language", "translate", "passthrough",
                                   {"detected": detection.language, "target": target,
-                                   "backend": used, "tried": chain})
-            # Prefixed here so the notice reaches the operator with the
-            # honorific even when translate() is called directly. ``prefix`` is
-            # idempotent, so the operator reply path cannot double it.
-            translated = self.prefix(f"{note} {text}")
+                                   "backend": used, "tried": chain,
+                                   "reason": note})
+            # The source, unchanged. The reason lives in the log line above and
+            # the audit record; see the class comment on the _NOTE_* constants
+            # for why it must not be prepended here.
+            translated = text
         with self._lock:
             self._cache[key] = translated
         return translated

@@ -83,15 +83,25 @@ class TextCommandInterface:
 
     def start(self) -> int:
         self.running = True
+        # Start beating before the banner so the Overseer has a live, owned pid
+        # to supervise from the very first moment, not only once a command runs.
+        self.kernel.start_heartbeat_refresher()
+        self.kernel.set_mode("interactive")
         self.banner()
-        while self.running:
-            try:
-                line = self._read(self.prompt)
-            except SystemExit:
-                self.say("Shutting down. Memory preserved.")
-                return 0
-            self.dispatch(line)
-        return 0
+        try:
+            while self.running:
+                try:
+                    line = self._read(self.prompt)
+                except SystemExit:
+                    self.say("Shutting down. Memory preserved.")
+                    return 0
+                self.dispatch(line)
+            return 0
+        finally:
+            # Reached on /exit and on an unhandled error out of dispatch(). A
+            # thread left running would keep rewriting data/heartbeat.json after
+            # the process is meant to be done.
+            self.kernel.stop_heartbeat_refresher()
 
     def dispatch(self, line: str) -> Any:
         line = (line or "").strip()
@@ -161,9 +171,20 @@ class TextCommandInterface:
             self.say("Give me a goal to run.")
             return
         self.say(f"Working on it: {goal}")
-        result = self.kernel.execute(goal, source="cli")
-        if result:
-            self.say(result)
+        # Branch on the structured result, not on the translated string: the
+        # operator has to be told when the plan's tools never ran. execute()'s
+        # return value goes through translation and the honorific, so a status
+        # word hidden in it cannot be tested for reliably.
+        reply, report = self.kernel.execute_report(goal, source="cli")
+        if report.partial:
+            missing = ", ".join(report.unexecuted_tools)
+            self.say(f"PARTIAL. This goal is not fully done: the plan listed "
+                     f"{missing}, but no tool actually ran, so that part is "
+                     f"unverified.")
+        elif not report.ok:
+            self.say("INCOMPLETE. Every delegated step failed - see the audit trail.")
+        if reply:
+            self.say(reply)
 
     def cmd_plan(self, args: list[str]) -> None:
         goal = " ".join(args).strip()
