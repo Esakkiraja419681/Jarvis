@@ -832,6 +832,11 @@ def _run(sandbox: Path) -> int:
         check("kernel and overseer agree on the heartbeat path",
               _hb_path == Path(kernel.overseer.heartbeat_path),
               f"{_hb_path} vs {kernel.overseer.heartbeat_path}")
+        # The refresher does not know how the session is being driven; the REPL says so.
+        # Asserting it here keeps the payload honest without coupling the kernel
+        # to the interface.
+        _prev_mode = kernel._mode
+        kernel.set_mode("interactive")
         _hb_had_previous = _hb_path.exists()
         try:
             # Remove any leftover so a stale file cannot make this pass by accident.
@@ -894,6 +899,7 @@ def _run(sandbox: Path) -> int:
         finally:
             kernel._hb_interval = 15.0
             kernel.stop_heartbeat_refresher()
+            kernel.set_mode(_prev_mode)
             check("heartbeat refresher stops cleanly",
                   kernel._hb_thread is None)
 
@@ -1039,7 +1045,8 @@ def _run(sandbox: Path) -> int:
         AgentTask(objective="fetch it", assigned_agent="orchestrator",
                   tools=["web_fetch"])], "forced")
     try:
-        _blind_out, _blind_res = _blind.execute(_plan_goal)
+        _blind_res = _blind.execute(_plan_goal)
+        _blind_out = _blind_res.output
         check("a plan whose tools never ran is partial", _blind_res.partial,
               f"partial={_blind_res.partial} used={_blind_res.used_tools}")
         check("the unexecuted tool is named",

@@ -60,7 +60,16 @@ class DelegationResult:
     # console says Done.
     planned_tools: list[str] = field(default_factory=list)
     used_tools: list[str] = field(default_factory=list)
-    unexecuted_tools: list[str] = field(default_factory=list)
+
+    @property
+    def unexecuted_tools(self) -> list[str]:
+        """Tools the plan promised that no subtask actually invoked.
+
+        Derived rather than stored: a caller that builds a result by hand must
+        not be able to forget to fill it in and thereby declare a half-run plan
+        complete.
+        """
+        return sorted(set(self.planned_tools) - set(self.used_tools))
 
     @property
     def partial(self) -> bool:
@@ -327,7 +336,6 @@ class TaskManager:
             duration_ms=duration,
             planned_tools=planned,
             used_tools=sorted(used_tools),
-            unexecuted_tools=sorted(set(planned) - used_tools),
         )
         if result.partial and result.ok:
             # Distinct from a failure: nothing crashed, but the plan's own
