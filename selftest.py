@@ -1069,42 +1069,52 @@ def _run(sandbox: Path) -> int:
     finally:
         del _blind.decompose
 
-    # And the operator-facing surface has to say so out loud.
+    # And the operator-facing surface has to say so out loud. Assert on what the
+    # operator actually receives: cmd_run's status word goes through
+    # process_outbound like any other reply, so checking the untranslated argument
+    # would pass while the console showed something else entirely - which is
+    # exactly how "INCOMPLETE" came to be translated away unnoticed.
     _iface = kernel.text_iface
     _echo = _iface._echo
     _iface._echo = False
     _said: list[str] = []
+    _spoken: list[str] = []
     _prev_say = _iface.say
     _iface.say = lambda text, translate=True: (
-        _said.append(text), _prev_say(text, translate=translate))[1]
+        _said.append(text),
+        _spoken.append(_prev_say(text, translate=translate)))[1]
     _prev_exec = kernel.task_manager.execute
-    kernel.task_manager.execute = lambda goal, context="", allow_tools=True: (
-        DelegationResult(goal=goal, output="Sir, வணக்கம். Hello.",
-                         planned_tools=["web_fetch"], used_tools=[]))
     try:
+        kernel.task_manager.execute = lambda goal, context="", allow_tools=True: (
+            DelegationResult(goal=goal, output="Sir, \u0bb5\u0ba3\u0b95\u0bcd\u0b95\u0bbe\u0bae. Hello.",
+                             planned_tools=["web_fetch"], used_tools=[]))
         _iface.cmd_run(["say", "hello", "in", "Tamil", "and", "English"])
-        _spoken = " ".join(_said)
+        _out = " ".join(_spoken)
         check("run announces PARTIAL when tools did not execute",
-              "PARTIAL" in _spoken, _spoken[:200])
+              "PARTIAL" in _out, _out[:200])
         check("run names the tool that never ran",
-              "web_fetch" in _spoken, _spoken[:200])
-        check("run still delivers the reply", "வணக்கம்" in _spoken,
-              _spoken[:200])
-    finally:
-        kernel.task_manager.execute = _prev_exec
-        _iface.say = _prev_say
-        _iface._echo = _echo
+              "web_fetch" in _out, _out[:200])
+        check("run still delivers the reply",
+              "\u0bb5\u0ba3\u0b95\u0bcd\u0b95\u0bbe\u0bae" in _out, _out[:200])
+        check("the reply carries no translation skip note",
+              "translation skipped" not in _out, _out[:200])
+        check("every line the operator sees is honorific-prefixed",
+              all(ln.startswith("Sir,") for ln in _spoken if ln.strip()),
+              str([ln[:40] for ln in _spoken])[:200])
 
-    _said.clear()
-    kernel.task_manager.execute = lambda goal, context="", allow_tools=True: (
-        DelegationResult(goal=goal, output="all good", ok=False))
-    try:
+        _said.clear()
+        _spoken.clear()
+        kernel.task_manager.execute = lambda goal, context="", allow_tools=True: (
+            DelegationResult(goal=goal, output="all good", ok=False))
         _iface.cmd_run(["do", "something", "impossible"])
-        _spoken = " ".join(_said)
+        _out = " ".join(_spoken)
         check("run announces INCOMPLETE on total failure",
-              "INCOMPLETE" in _spoken, _spoken[:200])
+              "INCOMPLETE" in _out, _out[:200])
         check("a total failure is not reported as partial",
-              "PARTIAL" not in _spoken, _spoken[:200])
+              "PARTIAL" not in _out, _out[:200])
+        check("a failed run still gets the honorific",
+              all(ln.startswith("Sir,") for ln in _spoken if ln.strip()),
+              str([ln[:40] for ln in _spoken])[:200])
     finally:
         kernel.task_manager.execute = _prev_exec
         _iface.say = _prev_say
