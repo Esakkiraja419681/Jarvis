@@ -683,8 +683,11 @@ def _run(sandbox: Path) -> int:
               _real_once.count("\n\n") == _real_ignore.count("\n\n"),
               f"{_real_once.count(chr(10) * 2)} vs {_real_ignore.count(chr(10) * 2)}")
         _comment_lines = [l for l in _real_once.splitlines() if l.strip().startswith("#")]
-        check("protect_memory preserved all 13 comments",
-              len(_comment_lines) == 13, str(len(_comment_lines)))
+        _comment_input = [l for l in _real_ignore.splitlines()
+                          if l.strip().startswith("#")]
+        check("protect_memory preserved every comment",
+              len(_comment_lines) == len(_comment_input),
+              f"{len(_comment_lines)} vs {len(_comment_input)}")
         check("protect_memory preserved comment placement",
               "# Secrets and local-only config." in _real_once
               and _real_once.index("# Secrets and local-only config.")
@@ -1668,6 +1671,7 @@ def _run(sandbox: Path) -> int:
 
     try:
         with peer_client("wrong-token") as conn:
+            conn.send(json.dumps({"type": "auth", "token": "wrong-token"}))
             frame = next_frame(conn, want="error", timeout=5.0)
             check("bad pairing token refused",
                   frame is not None
@@ -1676,7 +1680,9 @@ def _run(sandbox: Path) -> int:
     except Exception as exc:  # noqa: BLE001 - a failed dial is the expected fail-closed
         check("bad pairing token refused", False, f"{type(exc).__name__}: {exc}")
     token = str(start.get("token", ""))
+    time.sleep(0.3)
     with peer_client(token) as conn:
+        conn.send(json.dumps({"type": "auth", "token": token}))
         first = next_frame(conn, want="ack", timeout=5.0)
         check("handshake acked",
               first is not None
