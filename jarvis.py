@@ -16,6 +16,10 @@
     python jarvis.py --stop <id>              # stop a running program, then exit
     python jarvis.py --tools                  # list the tool registry, then exit
 
+    python jarvis.py --device serve           # serve device sync, then exit
+    python jarvis.py --sync [id ...]          # sync one device / all devices, then exit
+    python jarvis.py --translate "text" [--to en|ta]  # translate offline, then exit
+
 Every flag is a SESSION override: none of them writes config.json. Jarvis
 addresses the operator as "Sir" in every channel and runs exclusively on
 local Ollama. No external AI or cloud service is contacted without a live,
@@ -27,6 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 # Jarvis answers in the operator's language, and Tamil is not representable in
@@ -78,6 +83,20 @@ def build_parser() -> argparse.ArgumentParser:
                         help="stop a running program, then exit")
     parser.add_argument("--tools", action="store_true",
                         help="list the registered tool registry, then exit")
+    # --- one-shot device sync / translation actions (session-scoped) --------
+    parser.add_argument("--device", nargs="+", default=None, metavar="ARGS",
+                        help="device sync control: serve|stop|status|scan|sync|"
+                             "alert|list|add|remove|trust|reach|configure|"
+                             "current, then exit")
+    parser.add_argument("--sync", nargs="*", default=None, metavar="ID",
+                        help="sync with the given device ids (none = every "
+                             "registered device), then exit")
+    parser.add_argument("--translate", nargs="+", default=None, metavar="TEXT",
+                        help="translate text offline into the target "
+                             "language, then exit")
+    parser.add_argument("--to", default="", choices=("en", "ta"),
+                        help="target language for --translate (default: your "
+                             "preferred language)")
     return parser
 
 
@@ -119,7 +138,34 @@ def _run_action(kernel: JarvisKernel, args: argparse.Namespace) -> int:
         action = rest[0].lower() if rest else "status"
         return _report(kernel, kernel.software.control(program_id, action,
                                                        rest[1:]))
+    if args.device is not None:
+        result = kernel.device_sync.command(args.device)
+        if isinstance(result, dict) and result.get("serving"):
+            # serve stays up until the STOP file or Ctrl+C: an exit here would
+            # tear the listener down the moment it came up.
+            return _serve_until_stopped(kernel, result)
+        return _report(kernel, result)
+    if args.sync is not None:
+        return _report(kernel, kernel.device_sync.sync(args.sync or None))
+    if args.translate is not None:
+        return _report(kernel, kernel.language_layer.translate(
+            " ".join(args.translate), args.to))
     return _report(kernel, kernel.software.control(args.stop, "stop"))
+
+
+def _serve_until_stopped(kernel: JarvisKernel, result: dict) -> int:
+    """Serve device sync until data/STOP exists or the operator interrupts."""
+    _report(kernel, result)
+    stop_file = kernel.config.resolve(
+        str(kernel.config.get("loop.stop_file", "data/STOP")))
+    try:
+        while kernel.device_sync.running:
+            if stop_file.exists():
+                break
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        pass
+    return _report(kernel, kernel.device_sync.stop_server())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -144,12 +190,27 @@ def main(argv: list[str] | None = None) -> int:
         config.set_feature("background_daemon", True, persist=False)
     if args.cycles:
         config.set("loop.max_cycles", int(args.cycles), persist=False)
-    if args.tools or args.build or args.install or args.launch \
-            or args.control or args.stop:
+
+    # One dispatch, two gates: the feature block below and the action block
+    # after boot must agree on what counts as a one-shot action, so the
+    # predicate is computed exactly once instead of drifting between them.
+    one_shot = bool(
+        args.tools or args.build or args.install or args.launch
+        or args.control or args.stop
+        or args.device is not None or args.sync is not None
+        or args.translate is not None)
+
+    if one_shot:
         # Session-scoped enable for the one-shot action flags: the kernel sees
-        # both features on at boot; persist=False keeps config.json untouched.
-        config.set_feature("software_factory", True, persist=False)
-        config.set_feature("control_bridge", True, persist=False)
+        # the features on at boot; persist=False keeps config.json untouched.
+        if args.tools or args.build or args.install or args.launch \
+                or args.control or args.stop:
+            config.set_feature("software_factory", True, persist=False)
+            config.set_feature("control_bridge", True, persist=False)
+        if args.device is not None or args.sync is not None:
+            config.set_feature("device_manager", True, persist=False)
+        if args.translate is not None:
+            config.set_feature("language_layer", True, persist=False)
 
     if args.overseer:
         from jarvis_os.overseer import run_overseer
@@ -157,8 +218,7 @@ def main(argv: list[str] | None = None) -> int:
 
     kernel = JarvisKernel(config, honorific=args.honorific)
 
-    if args.tools or args.build or args.install or args.launch \
-            or args.control or args.stop:
+    if one_shot:
         try:
             return _run_action(kernel, args)
         finally:

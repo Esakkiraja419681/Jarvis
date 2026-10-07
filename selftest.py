@@ -30,10 +30,12 @@ for _stream in (sys.stdout, sys.stderr):
         # losing the guard must never stop the suite from running.
         pass
 
-from jarvis_os.config import Config
+from jarvis_os.config import _DEFAULTS, Config
 from jarvis_os.daemon import BackgroundDaemon, DaemonState
+from jarvis_os.device_manager import DeviceSyncManager
 from jarvis_os.kernel import JarvisKernel
 from jarvis_os.language import UniversalLanguageLayer
+from jarvis_os.language_layer import LanguageLayer
 from jarvis_os.permissions import PermissionGate
 from jarvis_os.selfupdate import MEMORY_GLOBS, SelfUpdate
 from jarvis_os.sandbox import PythonSandbox, SandboxError
@@ -78,6 +80,8 @@ _DATA_PATHS = (
     "loop.stop_file",
     "loop.pause_file",
     "sandbox.workdir",
+    "device_manager.tls_dir",
+    "device_manager.pairing_token_path",
 )
 
 
@@ -98,6 +102,21 @@ def sandbox_config(root: Path, live: Path) -> Config:
             raw = {}
     if not isinstance(raw, dict):
         raw = {}
+
+    for dotted in ("device_manager.tls_dir", "device_manager.pairing_token_path"):
+        parts = dotted.split(".")
+        node = raw
+        for part in parts[:-1]:
+            child = node.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                node[part] = child
+            node = child
+        fallback = _DEFAULTS
+        for part in parts:
+            fallback = fallback.get(part) if isinstance(fallback, dict) else None
+        if isinstance(fallback, str) and not isinstance(node.get(parts[-1]), str):
+            node[parts[-1]] = fallback
 
     for dotted in _DATA_PATHS:
         node = raw
@@ -165,6 +184,8 @@ def _run(sandbox: Path) -> int:
     config.set_feature("overseer", False)
     config.set_feature("voice", False)
     config.set_feature("rest_api", False)
+    config.set("device_manager.ws_port", 0, persist=False)
+    config.set("device_manager.bind_host", "127.0.0.1", persist=False)
     # Deterministic starting state: an Overseer isolation left behind by an
     # earlier crashed run would disarm the gate on boot (correct behaviour) and
     # make every later approval fail. Clear it before booting.
@@ -1405,9 +1426,330 @@ def _run(sandbox: Path) -> int:
     ns = parser.parse_args([])
     check("action flags default to inert (no accidental action)",
           not ns.tools and not ns.build and not ns.install
-          and not ns.launch and ns.control is None and not ns.stop)
+          and not ns.launch and ns.control is None and not ns.stop
+          and ns.device is None and ns.sync is None
+          and ns.translate is None and not ns.to)
+    check("--device parses subcommand words",
+          parser.parse_args(["--device", "serve"]).device == ["serve"])
+    check("--sync parses ids (bare --sync = all)",
+          parser.parse_args(["--sync", "phone1"]).sync == ["phone1"]
+          and parser.parse_args(["--sync"]).sync == [])
+    ns = parser.parse_args(["--translate", "vanakkam", "--to", "en"])
+    check("--translate parses text and target",
+          ns.translate == ["vanakkam"] and ns.to == "en",
+          f"{ns.translate} to={ns.to}")
     check("build_parser exposes a callable factory",
           callable(getattr(jarvis_cli, "build_parser", None)))
+
+    print("\n== language layer ==")
+    check("language layer wired into the kernel",
+          isinstance(kernel.language_layer, LanguageLayer))
+    honorific = str(kernel.language.honorific)
+    greeted = kernel.language_layer.respond("ready.")
+    check("respond prefixes the honorific",
+          greeted.startswith(honorific), greeted)
+    check("respond is idempotent",
+          kernel.language_layer.respond(greeted) == greeted,
+          kernel.language_layer.respond(greeted))
+    r = kernel.language_layer.translate("All systems are nominal.", "en")
+    check("translate reports already-in-target",
+          r.get("ok") is True and r.get("already") is True
+          and r.get("source") == "en" and r.get("target") == "en", str(r))
+    check("already message honors",
+          str(r.get("message", "")).startswith(honorific),
+          str(r.get("message")))
+    r = kernel.language_layer.translate("hello", "fr")
+    check("unsupported target refused",
+          r.get("ok") is False
+          and "serves en and ta" in str(r.get("error", "")), str(r))
+    r = kernel.language_layer.translate("")
+    check("empty text refused",
+          r.get("ok") is False
+          and "give me text to translate" in str(r.get("error", "")), str(r))
+    r = kernel.language_layer.translate("hello")
+    check("degraded translation is honest, not silent",
+          "backend" in r and (r.get("ok") is True or r.get("degraded") is True),
+          str(r))
+    r = kernel.language_layer.parse_intent('translate "good morning"')
+    check("intent: translate with quoted entity",
+          r.get("intent") == "translate"
+          and "good morning" in r.get("entities", {}).get("quoted", []), str(r))
+    r = kernel.language_layer.parse_intent("remember the milk")
+    check("intent: remember", r.get("intent") == "remember", str(r))
+    r = kernel.language_layer.parse_intent("hello there")
+    check("intent: greeting", r.get("intent") == "greeting", str(r))
+    r = kernel.language_layer.parse_intent("this is fine")
+    check("'this' does not fire 'hi'", r.get("intent") != "greeting", str(r))
+    r = kernel.language_layer.parse_intent("மொழிபெயர் இதை")
+    check("intent: Tamil translate keyword",
+          r.get("intent") == "translate", str(r))
+    r = kernel.language_layer.parse_intent("Stop right now")
+    check("intent: stop", r.get("intent") == "stop", str(r))
+    r = kernel.language_layer.parse_intent("what is the time")
+    check("intent: time", r.get("intent") == "time", str(r))
+    r = kernel.language_layer.parse_intent("xyzzy nonsense")
+    check("intent: unknown at zero confidence",
+          r.get("intent") == "unknown" and r.get("confidence") == 0.0, str(r))
+    check("intent messages honor",
+          str(r.get("message", "")).startswith(honorific),
+          str(r.get("message")))
+    kernel.config.set_feature("language_layer", False, persist=False)
+    r = kernel.language_layer.translate("hello")
+    check("language layer feature fails closed",
+          r.get("ok") is False
+          and "features.language_layer" in str(r.get("error", "")), str(r))
+    kernel.config.set_feature("language_layer", True, persist=False)
+    st = kernel.language_layer.status()
+    check("language layer status complete",
+          st.get("ok") is True and st.get("enabled") is True
+          and st.get("intent_rules", 0) >= 10
+          and "preferred" in st and "backends" in st, str(st))
+
+    print("\n== device sync ==")
+    ds = kernel.device_sync
+    check("device sync wired into the kernel",
+          isinstance(ds, DeviceSyncManager))
+    check("device sync report renders",
+          "DeviceSyncManager" in ds.report(), ds.report())
+    r = ds.command([])
+    check("command router defaults to status",
+          isinstance(r, str) and "device sync" in r, str(r))
+    r = ds.command(["bogus"])
+    check("unknown verb shows usage",
+          isinstance(r, dict) and r.get("ok") is False
+          and "Usage" in str(r.get("error", "")), str(r))
+    r = ds.command(["dispatch"])
+    check("dispatch without args shows usage",
+          isinstance(r, dict) and r.get("ok") is False
+          and "Usage" in str(r.get("error", "")), str(r))
+    tls = ds.ensure_tls()
+    check("tls material generated",
+          tls.get("ok") is True and tls.get("generated") is True, str(tls))
+    check("cert file exists",
+          Path(str(tls.get("cert", ""))).is_file(), str(tls))
+    again = ds.ensure_tls()
+    check("tls is generated once",
+          again.get("ok") is True and again.get("generated") is False, str(again))
+    tok = ds.ensure_token()
+    check("pairing token created",
+          tok.get("ok") is True
+          and len(str(tok.get("token", ""))) >= 32, str(tok))
+    tok2 = ds.ensure_token()
+    check("pairing token stable",
+          tok2.get("token") == tok.get("token"), str(tok2))
+    parse = DeviceSyncManager._parse_endpoint
+    check("parse ssh endpoint",
+          parse("ssh://u@127.0.0.1:2222") == {"scheme": "ssh", "host": "127.0.0.1",
+                                              "port": 2222, "user": "u"},
+          str(parse("ssh://u@127.0.0.1:2222")))
+    check("parse wss endpoint",
+          parse("wss://example.test:8443") == {"scheme": "wss",
+                                               "host": "example.test",
+                                               "port": 8443, "user": ""},
+          str(parse("wss://example.test:8443")))
+    check("ssh default port",
+          parse("ssh://127.0.0.1")["port"] == 8022,
+          str(parse("ssh://127.0.0.1")))
+    check("http endpoint refused", parse("http://x") is None,
+          str(parse("http://x")))
+    check("plain ws endpoint refused",
+          parse("ws://1.2.3.4:9") is None, str(parse("ws://1.2.3.4:9")))
+    tr = ds.transports()
+    check("websockets transport present",
+          tr.get("websockets") is True, str(tr))
+    check("tls transport present", tr.get("tls") is True, str(tr))
+    r = ds.sync()
+    check("sync with no peers is a no-op",
+          r.get("ok") is True and r.get("synced") == 0, str(r))
+    added = kernel.devices.command(["add", "phone1", "ssh://u@127.0.0.1:20223"])
+    check("peer device registered", "registered" in added, added)
+    kernel.devices.command(["add", "bare"])
+    kernel.devices.command(["add", "insecure", "ws://1.2.3.4:9"])
+    r = ds.dispatch("", ["echo", "hi"])
+    check("dispatch refuses empty id",
+          r.get("ok") is False and "Usage" in str(r.get("error", "")), str(r))
+    r = ds.dispatch("nope", ["echo", "hi"])
+    check("dispatch to unregistered device refused",
+          r.get("ok") is False
+          and "not registered" in str(r.get("error", "")), str(r))
+    r = ds.dispatch(kernel.devices.current, ["echo", "hi"])
+    check("dispatch to this machine refused",
+          r.get("ok") is False
+          and "this machine" in str(r.get("error", "")), str(r))
+    r = ds.dispatch("bare", ["echo", "hi"])
+    check("dispatch without endpoint refused",
+          r.get("ok") is False
+          and "no endpoint" in str(r.get("error", "")), str(r))
+    r = ds.dispatch("insecure", ["echo", "hi"])
+    check("plain ws endpoint refused at dispatch",
+          r.get("ok") is False
+          and "refused" in str(r.get("error", "")).lower(), str(r))
+    r = ds.alert("", "")
+    check("alert without args shows usage",
+          r.get("ok") is False and "Usage" in str(r.get("error", "")), str(r))
+    kernel.gate._text_input = lambda prompt: "no"
+    try:
+        r = ds.dispatch("phone1", ["echo", "hi"])
+        check("dispatch denied by operator", r.get("denied") is True, str(r))
+        r = ds.alert("phone1", "selftest alert")
+        check("alert denied by operator", r.get("denied") is True, str(r))
+    finally:
+        kernel.gate._text_input = lambda prompt: "yes"
+    started = time.monotonic()
+    r = ds.dispatch("phone1", ["echo", "hi"])
+    elapsed = time.monotonic() - started
+    check("ssh dispatch fails gracefully when refused",
+          r.get("ok") is False and "ssh exit" in str(r.get("error", "")),
+          str(r)[:200])
+    check("ssh failure is bounded", elapsed < 15.0, f"{elapsed:.2f}s")
+    listing = ds.command(["list"])
+    check("device registry lists peers",
+          isinstance(listing, str) and "Devices" in listing
+          and "phone1" in listing, str(listing).splitlines()[0])
+    state = ds.command(["status"])
+    check("device sync status string",
+          isinstance(state, str) and "device sync" in str(state), str(state))
+    kernel.config.set_feature("device_manager", False, persist=False)
+    check("feature off flips status",
+          "off for this session" in ds.status(), ds.status())
+    off = ds.dispatch("phone1", ["echo", "hi"])
+    check("device sync feature fails closed",
+          off.get("ok") is False
+          and "features.device_manager" in str(off.get("error", "")), str(off))
+    kernel.config.set_feature("device_manager", True, persist=False)
+
+    print("\n== device sync server ==")
+    ds.stream_interval = 0.2
+    start = ds.start_server()
+    check("sync server starts",
+          start.get("ok") is True and start.get("serving") is True, str(start))
+    port = int(start.get("port") or 0)
+    check("ephemeral port bound", port > 0, str(start.get("port")))
+    check("endpoint is wss",
+          str(start.get("endpoint", "")).startswith("wss://"),
+          str(start.get("endpoint")))
+    check("start returns the pairing token",
+          len(str(start.get("token", ""))) >= 32,
+          str(start.get("token", ""))[:8])
+    again = ds.start_server()
+    check("second start is idempotent",
+          again.get("ok") is True and again.get("already") is True
+          and int(again.get("port") or 0) == port, str(again))
+
+    import ssl as _ssl
+    from websockets.sync.client import connect as ws_connect
+
+    def peer_client(token, timeout=8.0):
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        return ws_connect(f"wss://127.0.0.1:{port}", ssl=ctx,
+                          open_timeout=timeout)
+
+    def next_frame(conn, want=None, timeout=6.0):
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                raw = conn.recv(timeout=remaining)
+            except Exception:  # noqa: BLE001 - closed or timed out
+                return None
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "replace")
+            try:
+                frame = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(frame, dict) and (want is None
+                                            or frame.get("type") == want):
+                return frame
+
+    try:
+        with peer_client("wrong-token") as conn:
+            frame = next_frame(conn, want="error", timeout=5.0)
+            check("bad pairing token refused",
+                  frame is not None
+                  and "pairing token" in str(frame.get("payload", {})),
+                  str(frame))
+    except Exception as exc:  # noqa: BLE001 - a failed dial is the expected fail-closed
+        check("bad pairing token refused", False, f"{type(exc).__name__}: {exc}")
+    token = str(start.get("token", ""))
+    with peer_client(token) as conn:
+        first = next_frame(conn, want="ack", timeout=5.0)
+        check("handshake acked",
+              first is not None
+              and first.get("payload", {}).get("authenticated") is True,
+              str(first))
+        pushed = next_frame(conn, want="status", timeout=5.0)
+        check("status pushed after auth", pushed is not None, str(pushed))
+        conn.send(json.dumps({"type": "command", "command": "ls"}))
+        frame = next_frame(conn, want="error", timeout=5.0)
+        check("inbound command refused",
+              frame is not None
+              and "one-directional" in str(frame.get("payload", {})), str(frame))
+        conn.send(json.dumps({"type": "alert", "payload": {"text": "selftest"}}))
+        frame = next_frame(conn, want="ack", timeout=5.0)
+        check("inbound alert acknowledged",
+              frame is not None
+              and frame.get("payload", {}).get("kind") == "alert", str(frame))
+        frame = next_frame(conn, want="stream", timeout=3.0)
+        check("status stream received", frame is not None, str(frame))
+        conn.send(json.dumps({"type": "bye"}))
+        closed = False
+        close_deadline = time.monotonic() + 5.0
+        while time.monotonic() < close_deadline:
+            try:
+                conn.recv(timeout=close_deadline - time.monotonic())
+            except TimeoutError:
+                break
+            except Exception:  # noqa: BLE001 - close frame or abrupt drop
+                closed = True
+                break
+        check("bye closes the connection", closed)
+
+    endpoint = str(start.get("endpoint", ""))
+    registered = kernel.devices.command(["add", "syncbox", endpoint])
+    check("local server registered as a peer",
+          "registered" in registered, registered)
+    r = ds.dispatch("syncbox", ["echo", "hi"])
+    check("wss dispatch reaches the peer and is refused",
+          r.get("ok") is False
+          and "refused" in str(r.get("error", "")).lower(), str(r))
+    pin = ds.tls_dir / "peers" / f"127.0.0.1_{port}.pem"
+    check("TOFU pin written on first handshake", pin.is_file(), str(pin))
+    original = pin.read_text(encoding="utf-8") if pin.is_file() else ""
+    pin.write_text("TAMPERED", encoding="utf-8")
+    r = ds.dispatch("syncbox", ["echo", "hi"])
+    check("pin mismatch refused",
+          r.get("ok") is False
+          and "pin" in str(r.get("error", "")).lower(), str(r))
+    pin.write_text(original, encoding="utf-8")
+    r = ds.dispatch("syncbox", ["echo", "hi"])
+    check("restored pin reaches the peer again",
+          r.get("ok") is False
+          and "refused" in str(r.get("error", "")).lower(), str(r))
+    r = ds.sync(["syncbox"])
+    check("wss sync succeeds against the local server",
+          r.get("ok") is True and r.get("synced") == 1, str(r))
+    r = ds.sync(["nope"])
+    check("sync with unknown id refused",
+          r.get("ok") is False
+          and "unknown device id" in str(r.get("error", "")), str(r))
+    stop = ds.stop_server()
+    check("server stops",
+          stop.get("ok") is True and stop.get("serving") is False, str(stop))
+    stop2 = ds.stop_server()
+    check("second stop is idempotent",
+          stop2.get("ok") is True and stop2.get("already") is True, str(stop2))
+    reachable = True
+    try:
+        with peer_client("x", timeout=3.0) as conn:
+            conn.recv(timeout=2.0)
+    except Exception:  # noqa: BLE001 - any failure means the port is closed
+        reachable = False
+    check("stopped server refuses connections", not reachable)
 
     print("\n== ollama tool-call normalisation ==")
     from jarvis_os.llm import OllamaBackend

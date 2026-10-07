@@ -142,6 +142,18 @@ _DEFAULTS: dict[str, Any] = {
         "current_device_id": "local",
         "allow_remote_config": False,
     },
+    "device_manager": {
+        "bind_host": "0.0.0.0",
+        "ws_port": 8772,
+        "tls_dir": "data/tls",
+        "pairing_token_path": "data/pairing.token",
+        "stream_interval_seconds": 30,
+        "handshake_timeout_seconds": 30,
+        "call_timeout_seconds": 8,
+        "ssh_timeout_seconds": 10,
+        "ssh_probe": "echo jarvis-sync-ok",
+        "mdns_service": "_jarvis-sync._tcp.local.",
+    },
     "self_update": {
         "repo_path": ".",
         "branch": "main",

@@ -19,6 +19,14 @@ argostranslate>=1.9    # OFFLINE translation. Requires language pairs to be
 speech_recognition>=3.10   # offline speech-to-text (Sphinx/Whisper backend)
 pyttsx3>=2.90              # offline text-to-speech output
 
+# --- Device sync (optional) ----------------------------------------------
+# Powers `python jarvis.py --device serve`: a local-only WSS listener with a
+# per-install certificate and pairing token (both generated into data/ on
+# first start, never downloaded). Imported lazily, so the core boots without
+# them; `--device` degrades to an actionable error until they are installed.
+websockets>=12.0           # WSS transport for the one-directional sync server
+cryptography>=42.0         # local TLS certificate + key generation (data/tls)
+
 # --- Background voice daemon (optional) -----------------------------------
 # Enables `python jarvis.py --voice` and setup-windows-daemon.ps1:
 # a non-blocking mic stream feeding an offline Vosk wake-word recogniser.

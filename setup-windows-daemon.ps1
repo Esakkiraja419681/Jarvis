@@ -11,8 +11,8 @@ $ModelDir = Join-Path $Root "models\vosk-model-small-en-us-0.15"
 $ModelUrl = "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
 function Write-Msg($m) { Write-Host "[setup] $m" }
 function Install-Dependencies {
-    Write-Msg "installing Python dependencies (pyautogui, pytesseract, vosk, sounddevice, pyttsx3)..."
-    python -m pip install --quiet pyautogui pytesseract vosk sounddevice pyttsx3
+    Write-Msg "installing Python dependencies (pyautogui, pytesseract, vosk, sounddevice, pyttsx3, websockets, cryptography)..."
+    python -m pip install --quiet pyautogui pytesseract vosk sounddevice pyttsx3 websockets cryptography
     if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
     if (-not (Test-Path (Join-Path $ModelDir "am"))) {
         Write-Msg "downloading Vosk model (~40 MB)..."
@@ -92,7 +92,7 @@ switch ($Action) {
                 Write-Msg "heartbeat age: $([math]::Round(((Get-Date).ToUniversalTime() - $when).TotalSeconds, 1))s"
             }
         } else { Write-Msg "heartbeat: missing (daemon not running)" }
-        $deps = python -c "import importlib.util,json; print(json.dumps({m: bool(importlib.util.find_spec(m)) for m in ['pyautogui','pytesseract','vosk','sounddevice','pyttsx3']}))"
+        $deps = python -c "import importlib.util,json; print(json.dumps({m: bool(importlib.util.find_spec(m)) for m in ['pyautogui','pytesseract','vosk','sounddevice','pyttsx3','websockets','cryptography']}))"
         Write-Msg "deps: $deps"
         Write-Msg "tesseract engine: $(if (Get-Command tesseract -ErrorAction SilentlyContinue) { 'present' } else { 'MISSING (ui_control ocr needs the Tesseract OCR engine)' })"
         Write-Msg "vosk model: $(if (Test-Path (Join-Path $ModelDir 'am')) { 'present' } else { 'MISSING (run -Action install)' })"

@@ -28,11 +28,13 @@ from .audit import AuditLedger
 from .config import Config
 from .control_bridge import ControlBridge
 from .daemon import BackgroundDaemon
+from .device_manager import DeviceSyncManager
 from .devices import DeviceManager
 from .evolution import SelfEvolution
 from .interfaces.text import TextCommandInterface
 from .interfaces.voice import VoiceCommandInterface
 from .language import UniversalLanguageLayer
+from .language_layer import LanguageLayer
 from .llm import LLMClient, LLMUnavailable
 from .memory import PersistentMemory, local_embed
 from .overseer import OverseerAgenticOS
@@ -135,6 +137,10 @@ class JarvisKernel:
         # Needs self.llm: without it the Ollama translation fallback can never
         # activate and en->ta silently loses its last-resort backend.
         self.language = UniversalLanguageLayer(cfg, llm=self.llm, audit=self.audit)
+        # Operator-facing surface over the layer above: on-demand translate
+        # and the bounded intent table. Shares the layer, so one cache,
+        # one backend chain and one audit trail.
+        self.language_layer = LanguageLayer(cfg, self.language)
 
         # --- execution ------------------------------------------------------
         self.sandbox = PythonSandbox(cfg, gate=self.gate, audit=self.audit)
@@ -169,6 +175,11 @@ class JarvisKernel:
         # --- devices & daemon ------------------------------------------------
         self.devices = DeviceManager(cfg, gate=self.gate, audit=self.audit,
                                      memory=self.memory, control=self.control)
+        # Transport over DeviceManager: WSS/SSH endpoints, TLS material, the
+        # one-directional dispatch server. Constructed side-effect free -
+        # no socket opens until start_server().
+        self.device_sync = DeviceSyncManager(cfg, gate=self.gate,
+                                             audit=self.audit, devices=self.devices)
         self.daemon = BackgroundDaemon(cfg, gate=self.gate, audit=self.audit)
         self.daemon.bind_kernel(self)
 
@@ -729,6 +740,7 @@ class JarvisKernel:
             f"[language]  {self.language.status()}",
             f"[software]  {len(self.software.registry)} program(s) built",
             f"[devices]   {self.devices.report()}",
+            f"[sync]      {self.device_sync.report()}",
             f"[daemon]    {self.daemon.status()}",
             f"[evolve]    {self.evolve_engine.phases_report().splitlines()[0] if self.evolve_engine.cycles else 'no cycle yet'}",
             "",
@@ -757,6 +769,12 @@ class JarvisKernel:
             pass
         try:
             self.overseer.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        # Stop the dispatch server before the audit ledger closes: an in-flight
+        # peer frame logs through the same ledger and must not race a close.
+        try:
+            self.device_sync.stop_server()
         except Exception:  # noqa: BLE001
             pass
         self.audit.record("kernel", "shutdown", "ok",
