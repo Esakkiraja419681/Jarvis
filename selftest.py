@@ -589,6 +589,22 @@ def _run(sandbox: Path) -> int:
         kernel.software.control(pid, "stop")
         check("registry tracks program", kernel.software.registry.get(pid) is not None)
 
+        # Phase 2 smoke chain runs build/install/launch as separate processes:
+        # the bridge table is in-memory, so a fresh SoftwareFactory over the
+        # same registry must restore the registration (and a stop must clear
+        # the persisted pid so a stale one is never resurrected).
+        kernel.control.processes.pop(pid, None)
+        from jarvis_os.software_factory import SoftwareFactory
+        SoftwareFactory(kernel.config, kernel.llm, kernel.memory, kernel.gate,
+                        kernel.control, kernel.sandbox, audit=kernel.audit)
+        check("fresh factory restores bridge registration",
+              pid in kernel.control.processes, str(sorted(kernel.control.processes)))
+        check("restored registration is controllable",
+              kernel.software.control(pid, "status").get("ok"))
+        check("stopped program persists no running pid",
+              kernel.software.registry.get(pid).pid is None,
+              str(kernel.software.registry.get(pid).pid))
+
     # A small local model can return parseable code that does not run. The
     # build must still yield a runnable artifact instead of failing outright.
     original_ask = kernel.software.llm.ask_json

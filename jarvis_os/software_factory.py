@@ -147,6 +147,29 @@ class SoftwareFactory:
         self.registry = SoftwareRegistry(
             config.resolve("software_factory.registry_path"))
         self.runtime = str(config.get("software_factory.runtime", "python"))
+        self._sync_bridge()
+
+    def _sync_bridge(self) -> None:
+        """Re-register installed programs into the control bridge at boot.
+
+        The bridge keeps its process table in memory only, so a fresh process
+        (REPL restart or a one-shot CLI flag like ``--launch``) could otherwise
+        never start or control what an earlier process installed. The persisted
+        registry is the source of truth for argv/cwd/env; a persisted running
+        pid is restored so ``status``/``stop`` keep working across the process
+        boundary - every guard downstream still checks the pid is alive.
+        """
+        for program in self.registry.all():
+            if not program.installed:
+                continue
+            proc = self.bridge.register(
+                program.program_id, self._argv(program), program.path,
+                env={"JARVIS_PROGRAM": program.program_id,
+                     "JARVIS_SIR": self.config.honorific()},
+            )
+            pid = program.pid if isinstance(program.pid, int) else 0
+            if program.status == "running" and pid:
+                proc.pid = pid
 
     # ----------------------------------------------------------------- build
     def build(self, spec: str, name: str = "", language: str = "") -> dict[str, Any]:
@@ -344,6 +367,8 @@ class SoftwareFactory:
         if result.get("ok"):
             if action in ("stop", "restart"):
                 program.status = "stopped" if action == "stop" else "running"
+                program.pid = None if action == "stop" else (
+                    result.get("pid") or program.pid)
                 program.history.append(f"{action} at {time.time():.0f}")
                 self.registry.save()
         return result
