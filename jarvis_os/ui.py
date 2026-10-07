@@ -1,4 +1,4 @@
-"""OS UI control via pyautogui - click, type, hotkeys, scroll, screenshots.
+"""OS UI control via pyautogui - click, type, hotkeys, scroll, screenshots, OCR.
 
 The tool is registered by the ToolRegistry under the name ``ui_control``
 with permission category ``ui_control`` (gated: manual approval required),
@@ -21,7 +21,19 @@ from pathlib import Path
 from typing import Any
 
 ACTIONS = ("position", "move", "click", "doubleclick", "rightclick",
-           "type", "hotkey", "press", "scroll", "screenshot")
+           "type", "hotkey", "press", "scroll", "screenshot",
+           "ocr", "click_text")
+
+
+def _tesseract():
+    """Import pytesseract lazily; returns (module, error_dict) - one is None."""
+    try:
+        import pytesseract
+    except Exception as exc:  # noqa: BLE001 - package absent on lean installs
+        return None, {"ok": False, "error":
+                      f"pytesseract unavailable ({type(exc).__name__}: {exc}) - run "
+                      "setup-windows-daemon.ps1 -Action install, Sir."}
+    return pytesseract, None
 
 
 def _keys(kwargs: dict[str, Any]) -> list[str]:
@@ -36,7 +48,9 @@ def run(action: str = "", **kwargs: Any) -> dict[str, Any]:
 
     Actions: position, move(x, y), click(x, y, button, clicks),
     doubleclick(x, y), rightclick(x, y), type(text, interval),
-    hotkey(keys=[...]), press(key), scroll(amount), screenshot().
+    hotkey(keys=[...]), press(key), scroll(amount), screenshot(),
+    ocr() - screen text via pytesseract, click_text(text) - find a phrase
+    on screen and click its centre.
     Gated as permission category 'ui_control'; pyautogui FailSafe is kept on.
     """
     action = str(action or "").strip().lower()
@@ -49,6 +63,45 @@ def run(action: str = "", **kwargs: Any) -> dict[str, Any]:
         return {"ok": False, "error":
                 f"pyautogui unavailable ({type(exc).__name__}: {exc}) - run "
                 "setup-windows-daemon.ps1 -Action install, Sir."}
+    if action in ("ocr", "click_text"):
+        pytesseract, t_err = _tesseract()
+        if t_err is not None:
+            return {**t_err, "action": action}
+        image = pyautogui.screenshot()
+        try:
+            data = pytesseract.image_to_data(
+                image, output_type=pytesseract.Output.DICT)
+        except Exception as exc:  # noqa: BLE001 - engine missing, display headless
+            return {"ok": False, "action": action, "error":
+                    f"tesseract engine unavailable ({type(exc).__name__}: {exc}) - "
+                    "install the Tesseract OCR engine, Sir."}
+        texts = [str(t) for t in data.get("text", [])]
+        if action == "ocr":
+            words = [t.strip() for t in texts if t.strip()]
+            return {"ok": True, "action": "ocr", "text": " ".join(words),
+                    "words": len(words)}
+        # action == "click_text"
+        needle = str(kwargs.get("text", "")).strip().lower()
+        if not needle:
+            return {"ok": False, "action": action,
+                    "error": "click_text needs text=<phrase on screen>"}
+        match = next((i for i, t in enumerate(texts) if t.strip().lower() == needle),
+                     None)
+        if match is None:
+            match = next((i for i, t in enumerate(texts)
+                          if needle in t.strip().lower()), None)
+        if match is None:
+            return {"ok": False, "action": action,
+                    "error": f"text {needle!r} not found on screen"}
+        try:
+            cx = int(data["left"][match]) + int(data["width"][match]) // 2
+            cy = int(data["top"][match]) + int(data["height"][match]) // 2
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            return {"ok": False, "action": action,
+                    "error": f"ocr box data unusable: {exc}"}
+        pyautogui.click(cx, cy)
+        return {"ok": True, "action": action, "x": cx, "y": cy,
+                "matched": texts[match].strip()}
     try:
         if action == "position":
             point = pyautogui.position()

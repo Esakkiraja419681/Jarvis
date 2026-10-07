@@ -1240,6 +1240,159 @@ def _run(sandbox: Path) -> int:
     check("configure writes env file",
           (kernel.control.root / "smoke_proc.log").exists() or True)
 
+    print("\n== ipc command bridge ==")
+    # submit -> poll round-trip through the JSON command file. The bridge root
+    # follows control_bridge.ipc_path, which _DATA_PATHS redirected into the
+    # sandbox, so these writes never land in the live data/control/ directory.
+    kernel.control.submit("smoke_proc", "status")
+    ipc_results = kernel.control.poll()
+    check("ipc round-trip executes the command",
+          bool(ipc_results) and ipc_results[0].get("ok"), str(ipc_results)[:200])
+    resp_path = kernel.control.response_path
+    check("ipc response file written for the caller",
+          resp_path.is_file(), str(resp_path))
+    good_response = (json.loads(resp_path.read_text(encoding="utf-8"))
+                     if resp_path.is_file() else {})
+    check("ipc response file carries the verdict",
+          good_response.get("ok"), str(good_response)[:160])
+    bad_payload = {"program": "smoke_proc", "action": "stop", "args": [],
+                   "ts": 0, "token": "not-the-real-token"}
+    kernel.control.ipc_path.write_text(json.dumps(bad_payload), encoding="utf-8")
+    refused = kernel.control.poll()
+    check("ipc bad token refused",
+          bool(refused) and not refused[0].get("ok")
+          and "token" in str(refused[0]), str(refused)[:200])
+    check("refused command file cleared after poll",
+          not kernel.control.ipc_path.exists())
+    still = (json.loads(resp_path.read_text(encoding="utf-8"))
+             if resp_path.is_file() else {})
+    check("refused command does not overwrite the response",
+          still == good_response, f"{still} vs {good_response}")
+    check("refused ipc never reaches dispatch",
+          kernel.control.command_count >= 2 and refused
+          and kernel.control.processes["smoke_proc"].pid is None,
+          str(kernel.control.processes["smoke_proc"].pid))
+
+    # The module rename ships with Phase 2: jarvis_os.control must be gone
+    # and the gui channel must exist on the bridge.
+    from jarvis_os import control_bridge as _cb_mod
+    check("gui exposed as a control-bridge action",
+          "gui" in _cb_mod.ACTIONS, str(_cb_mod.ACTIONS))
+    gui_unknown = kernel.control.dispatch("_", "gui", ["warp"])
+    check("gui rejects unknown sub-action",
+          not gui_unknown.get("ok")
+          and "gui" in str(gui_unknown.get("error", "")), str(gui_unknown))
+    try:
+        import jarvis_os.control as _legacy  # noqa: F401
+        legacy_gone = False
+    except ModuleNotFoundError:
+        legacy_gone = True
+    check("legacy jarvis_os.control module renamed away", legacy_gone)
+
+    print("\n== dynamic tool validation ==")
+    from jarvis_os.tool_registry import static_validate
+    good_src = ('def run(value=""):\n'
+                '    """Selftest dynamic tool."""\n'
+                '    return {"ok": True, "echo": str(value), "n": len(str(value))}\n')
+    verdict = kernel.tools.register_validated(
+        "st_dyn_tool", good_src, "selftest validated tool",
+        probe_args={"value": "hi"})
+    check("validated tool registered",
+          verdict.get("ok") and verdict.get("stage") == "registered",
+          str(verdict)[:200])
+    dyn = kernel.tools.get("st_dyn_tool")
+    check("dynamic tool present and callable",
+          dyn is not None and dyn.handler(value="x").get("echo") == "x",
+          str(dyn.handler(value="x")) if dyn else "not registered")
+    check("dynamic tool marked dangerous code_exec",
+          dyn is not None and dyn.dangerous
+          and dyn.permission_category == "code_exec",
+          str(dyn.permission_category) if dyn else "not registered")
+    check("dynamic tool is not builtin",
+          dyn is not None and not dyn.builtin)
+    check("network import rejected statically",
+          not static_validate("st_bad", "import socket\ndef run():\n    return {}")
+          .get("ok"))
+    check("eval rejected statically",
+          not static_validate("st_bad", "def run():\n    return eval('1')").get("ok"))
+    check("open rejected statically",
+          not static_validate("st_bad", "def run():\n    open('x', 'w')")
+          .get("ok"))
+    check("syntax error rejected statically",
+          not static_validate("st_bad", "def run(:").get("ok"))
+    check("invalid tool name rejected statically",
+          not static_validate("bad name!", "def run():\n    return {}").get("ok"))
+    raiser = 'def run(**kw):\n    raise RuntimeError("boom")\n'
+    probe_fail = kernel.tools.register_validated(
+        "st_boom_tool", raiser, "always raises")
+    check("raising tool fails the sandbox probe",
+          not probe_fail.get("ok")
+          and probe_fail.get("stage") in ("call", "probe", "import"),
+          str(probe_fail)[:200])
+    check("raising tool never reaches the registry",
+          kernel.tools.get("st_boom_tool") is None)
+    kernel.gate._text_input = lambda prompt: "no"
+    try:
+        denied = kernel.tools.register_validated(
+            "st_denied_tool", good_src, "denied tool")
+    finally:
+        kernel.gate._text_input = lambda prompt: "yes"
+    check("gate denial blocks registration",
+          not denied.get("ok") and denied.get("stage") == "permission",
+          str(denied)[:200])
+    check("denied tool never reaches the registry",
+          kernel.tools.get("st_denied_tool") is None)
+
+    print("\n== ocr & dependency wiring ==")
+    ocr = kernel.tools.call("ui_control", {"action": "ocr"},
+                            require_permission=False)
+    check("ocr returns a dict verdict, never an exception",
+          isinstance(ocr, dict) and "ok" in ocr, str(ocr)[:160])
+    if ocr.get("ok"):
+        check("ocr returns text payload", isinstance(ocr.get("text"), str),
+              str(ocr)[:160])
+    else:
+        check("ocr failure names the problem",
+              any(k in str(ocr.get("error", "")).lower()
+                  for k in ("install", "unavailable", "engine", "pyautogui")),
+              str(ocr)[:200])
+    ct = kernel.tools.call("ui_control", {"action": "click_text"},
+                           require_permission=False)
+    check("click_text requires a text argument",
+          not ct.get("ok") and "text" in str(ct.get("error", "")).lower(),
+          str(ct)[:200])
+    req_text = (REPO_ROOT / "requirements.txt").read_text(encoding="utf-8")
+    check("requirements.txt declares pytesseract",
+          "pytesseract" in req_text, "missing from requirements.txt")
+    setup_text = (REPO_ROOT / "setup-windows-daemon.ps1").read_text(encoding="utf-8")
+    check("setup script installs and reports pytesseract",
+          setup_text.count("pytesseract") >= 2,
+          f"found {setup_text.count('pytesseract')} reference(s)")
+
+    print("\n== cli action flags ==")
+    import jarvis as jarvis_cli
+    parser = jarvis_cli.build_parser()
+    ns = parser.parse_args(["--build", "hello world greeting program"])
+    check("--build parses the spec",
+          ns.build == "hello world greeting program", ns.build)
+    ns = parser.parse_args(["--install", "sw_123"])
+    check("--install parses the program id", ns.install == "sw_123", ns.install)
+    ns = parser.parse_args(["--launch", "sw_123"])
+    check("--launch parses the program id", ns.launch == "sw_123", ns.launch)
+    ns = parser.parse_args(["--control", "sw_123", "status"])
+    check("--control parses id and action",
+          ns.control == ["sw_123", "status"], str(ns.control))
+    ns = parser.parse_args(["--stop", "sw_123"])
+    check("--stop parses the program id", ns.stop == "sw_123", ns.stop)
+    ns = parser.parse_args(["--tools"])
+    check("--tools parses", ns.tools is True)
+    ns = parser.parse_args([])
+    check("action flags default to inert (no accidental action)",
+          not ns.tools and not ns.build and not ns.install
+          and not ns.launch and ns.control is None and not ns.stop)
+    check("build_parser exposes a callable factory",
+          callable(getattr(jarvis_cli, "build_parser", None)))
+
     print("\n== ollama tool-call normalisation ==")
     from jarvis_os.llm import OllamaBackend
     calls = OllamaBackend._normalise_tool_calls([

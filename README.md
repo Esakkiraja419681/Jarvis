@@ -50,6 +50,17 @@ Jarvis says so and every other subsystem keeps working.
 | `python jarvis.py --no-voice` | Force the text interface |
 | `python jarvis.py --voice` | Start the background voice daemon for this session (never written to config.json) |
 | `python jarvis.py --honorific "Madam"` | Change the form of address |
+| `python jarvis.py --build "<spec>"` | One-shot: generate + install software, then exit (permission-gated) |
+| `python jarvis.py --install <id>` | One-shot: install a built program, then exit |
+| `python jarvis.py --launch <id>` | One-shot: launch an installed program, then exit |
+| `python jarvis.py --control <id> <action> [args...]` | One-shot: send `status`/`stop`/`configure`/`gui`/... to a program, then exit |
+| `python jarvis.py --stop <id>` | One-shot: stop a running program, then exit |
+| `python jarvis.py --tools` | Print the registered tool inventory, then exit |
+
+The one-shot action flags boot the kernel, run exactly that action with the
+live permission gate, and exit `0`/`1`. None of them write to `config.json`.
+`--control <id> gui <sub>` reaches the GUI channel (`ocr`, `click_text`,
+`type_text`) on the control bridge.
 
 To get a genuinely independent second Overseer process, start it separately:
 
@@ -69,9 +80,9 @@ ignored, microphone audio is dropped while pyttsx3 speaks (no echo), and
 recognised text goes through the language layer before a REPL verb dispatch or
 a TaskManager goal. Everything stays local.
 
-Setup, on Windows, from the repo root (first run installs `pyautogui`, `vosk`,
-`sounddevice`, `pyttsx3` and downloads the ~40 MB Vosk English model into
-`models\` - Jarvis itself never downloads anything):
+Setup, on Windows, from the repo root (first run installs `pyautogui`,
+`pytesseract`, `vosk`, `sounddevice`, `pyttsx3` and downloads the ~40 MB Vosk
+English model into `models\` - Jarvis itself never downloads anything):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action install
@@ -86,10 +97,13 @@ The scheduled task runs `pythonw jarvis.py --daemon --voice` in the logged-on
 session only, so the pyautogui tool always has a real desktop. In the REPL,
 `voice on` / `voice off` start and stop the daemon for the session too.
 
-The `ui_control` tool (click, type, hotkey, press, scroll, screenshot) is
-backed by pyautogui, is gated behind manual permission like any system
-modification, and keeps pyautogui's FailSafe (throw the mouse to the top-left
-corner to abort) enabled.
+The `ui_control` tool (click, type, hotkey, press, scroll, screenshot, `ocr`,
+`click_text`) is backed by pyautogui, is gated behind manual permission like any
+system modification, and keeps pyautogui's FailSafe (throw the mouse to the
+top-left corner to abort) enabled. `ocr` and `click_text` additionally need the
+Tesseract OCR engine: `pytesseract` is installed with the other Python
+dependencies, but the engine itself must be installed separately. Until it is,
+those two actions return a clear "install it, Sir" message instead of crashing.
 
 ---
 
@@ -160,7 +174,11 @@ vector index if it was damaged; it never resets data.
 **Nothing runs unsandboxed.** Python execution goes through a subprocess with a
 clean preload that blocks `socket`/`ctypes`-style escape hatches and is killed on
 timeout. Shell commands are validated against a metacharacter blacklist. File
-tools refuse paths outside the project root.
+tools refuse paths outside the project root. Dynamically loaded tools go through
+`jarvis_os/tool_registry.py`: a static denylist scan, then the mandatory manual
+`skill_add` gate, then a sandboxed probe call, and only then are they registered
+- always flagged `dangerous=True` under the `code_exec` permission category.
+Every stage fails closed and is written to the audit ledger.
 
 **Everything is auditable.** Every permission decision, tool call, memory write,
 software action and Overseer action is appended to a hash-chained SQLite ledger.
@@ -173,7 +191,7 @@ Writes use `BEGIN IMMEDIATE`, so concurrent processes interleave safely and
 operation. Do not flip it on to make a device reachable:
 
 * `ControlBridge` binds `control_bridge.rest_host`, which defaults to `127.0.0.1`
-  (`jarvis_os/control.py`), and is token-protected. It is not listening on the LAN,
+  (`jarvis_os/control_bridge.py`), and is token-protected. It is not listening on the LAN,
   so no other machine can be configured no matter what this flag says. Enabling it
   cannot make the feature work.
 * Because the only reachable control endpoint is the laptop's own loopback one,
@@ -252,14 +270,14 @@ delete it or run `overseer clear` to release the isolation.
 
 ```text
 jarvis.py                    CLI entry point / REPL
-selftest.py                  130-check end-to-end suite
+selftest.py                  full end-to-end suite
 config.json                  feature flags and settings
 jarvis_os/
   kernel.py                  central wiring, heartbeat, execution, loop
   config.py  audit.py  memory.py  permissions.py
-  sandbox.py  tools.py  agents.py  taskmanager.py  llm.py
+  sandbox.py  tools.py  tool_registry.py  agents.py  taskmanager.py  llm.py
   language.py  selfupdate.py  evolution.py  overseer.py
-  software_factory.py  control.py  devices.py  daemon.py
+  software_factory.py  control_bridge.py  devices.py  daemon.py
   interfaces/                text and voice front ends
 data/                        runtime state (memory, audit, registries, logs)
 ```

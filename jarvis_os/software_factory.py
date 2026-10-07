@@ -2,7 +2,7 @@
 
 Flow: **spec -> generate -> sandbox-verify -> register -> install -> launch ->
 monitor -> control**. :class:`SoftwareRegistry` is the durable ledger of every
-program Jarvis has ever built; :class:`~jarvis_os.control.ControlBridge` owns the
+program Jarvis has ever built; :class:`~jarvis_os.control_bridge.ControlBridge` owns the
 process lifecycle.
 
 The factory works for any kind of runnable it can host locally (Python, Node,

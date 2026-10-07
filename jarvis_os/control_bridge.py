@@ -8,6 +8,8 @@
 
 All three funnel into :meth:`ControlBridge.dispatch`, so there is exactly one
 authorisation and audit path regardless of which channel a command arrives on.
+Beyond program lifecycle, ``dispatch`` also serves the ``gui`` action (desktop
+OCR / click-by-text / type), which addresses the screen rather than a process.
 """
 
 from __future__ import annotations
@@ -22,9 +24,10 @@ import urllib.parse
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
-ACTIONS = ("start", "stop", "restart", "status", "inspect", "logs", "configure", "signal")
+ACTIONS = ("start", "stop", "restart", "status", "inspect", "logs", "configure",
+           "signal", "gui")
 
 
 @dataclass(slots=True)
@@ -55,9 +58,19 @@ class ControlBridge:
         self.config = config
         self.gate = gate
         self.audit = audit
-        self.root = Path(root or "data/control").resolve()
+        # The IPC file honours control_bridge.ipc_path so Config redirection
+        # (selftest, embedded installs) actually isolates it; the default
+        # "data/control.sock" resolves to the same directory as before.
+        if root is not None:
+            self.root = Path(root).resolve()
+            self.ipc_path = self.root / "command.json"
+        else:
+            ipc = Path(str(config.get("control_bridge.ipc_path", "data/control.sock")))
+            if not ipc.is_absolute():
+                ipc = config.root / ipc
+            self.ipc_path = ipc
+            self.root = ipc.parent
         self.root.mkdir(parents=True, exist_ok=True)
-        self.ipc_path = self.root / "command.json"
         self.response_path = self.root / "response.json"
         self.rest_host = str(config.get("control_bridge.rest_host", "127.0.0.1"))
         self.rest_port = int(config.get("control_bridge.rest_port", 8770))
@@ -93,9 +106,14 @@ class ControlBridge:
             return {"ok": False, "error": f"unknown action '{action}'. "
                                          f"Valid: {', '.join(ACTIONS)}"}
         if self.gate is not None:
+            if action == "gui":
+                prompt = (f"Jarvis requests permission to operate the desktop GUI "
+                          f"({(args or [''])[0]}).")
+            else:
+                prompt = f"Jarvis requests permission to {action} software '{program_id}'."
             if not self.gate.approve(
                 "software_control",
-                f"Jarvis requests permission to {action} software '{program_id}'.",
+                prompt,
                 detail={"program": program_id, "action": action, "args": args or []},
             ):
                 if self.audit:
@@ -106,6 +124,7 @@ class ControlBridge:
             "start": self._start, "stop": self._stop, "restart": self._restart,
             "status": self._status, "inspect": self._inspect, "logs": self._logs,
             "configure": self._configure, "signal": self._signal,
+            "gui": self._gui,
         }[action]
         try:
             result = handler(program_id, args or [])
@@ -241,6 +260,41 @@ class ControlBridge:
             return {"ok": False, "error": f"unknown signal '{name}'"}
         os.kill(proc.pid, sig)
         return {"ok": True, "signalled": name, "pid": proc.pid}
+
+    def _gui(self, program_id: str, args: list[str]) -> dict[str, Any]:
+        """Desktop GUI operations: ``ocr``, ``click_text <text>``, ``type_text <text>``.
+
+        Unlike every other action this one addresses the desktop itself, not a
+        managed program, so it deliberately never calls :meth:`_require` - the
+        dispatch gate has already asked ``software_control`` approval, and the
+        UI half re-uses the gated ``ui_control`` tool implementation.
+        """
+        sub = str(args[0]).lower() if args else ""
+        rest = [str(a) for a in args[1:]]
+        mapping = {"ocr": "ocr", "click_text": "click_text", "type_text": "type"}
+        if sub not in mapping:
+            return {"ok": False, "error":
+                    f"unknown gui action '{sub}'. Valid: "
+                    f"{', '.join(sorted(mapping))}"}
+        try:
+            from .ui import run as ui_run
+        except Exception as exc:  # noqa: BLE001 - optional UI stack
+            return {"ok": False, "error": f"ui module unavailable: {exc}"}
+        if sub == "ocr":
+            result = ui_run("ocr")
+        elif sub == "click_text":
+            if not rest:
+                return {"ok": False, "error": "usage: gui click_text <text on screen>"}
+            result = ui_run("click_text", text=" ".join(rest))
+        else:  # type_text
+            if not rest:
+                return {"ok": False, "error": "usage: gui type_text <text to type>"}
+            result = ui_run("type", text=" ".join(rest))
+        if self.audit:
+            self.audit.record("control", f"gui:{sub}",
+                              "ok" if result.get("ok") else "failed",
+                              {"sub": sub, "program": program_id})
+        return {**result, "action": f"gui:{sub}"}
 
     def _require(self, program_id: str) -> ManagedProcess:
         proc = self.processes.get(program_id)

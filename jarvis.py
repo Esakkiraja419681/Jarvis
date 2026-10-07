@@ -8,7 +8,16 @@
     python jarvis.py --goal "..."    # run one goal, then exit
     python jarvis.py --attach        # recall a running background instance
 
-Jarvis addresses the operator as "Sir" in every channel and runs exclusively on
+    python jarvis.py --build "spec"           # build software, then exit
+    python jarvis.py --install <id>           # install a built program, then exit
+    python jarvis.py --launch <id>            # launch an installed program, then exit
+    python jarvis.py --control <id> <action>  # control/status/logs a program
+    python jarvis.py --control gui ocr        # desktop OCR via the control bridge
+    python jarvis.py --stop <id>              # stop a running program, then exit
+    python jarvis.py --tools                  # list the tool registry, then exit
+
+Every flag is a SESSION override: none of them writes config.json. Jarvis
+addresses the operator as "Sir" in every channel and runs exclusively on
 local Ollama. No external AI or cloud service is contacted without a live,
 manual, per-request approval.
 """
@@ -16,6 +25,7 @@ manual, per-request approval.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -37,7 +47,8 @@ from jarvis_os.config import Config          # noqa: E402
 from jarvis_os.kernel import JarvisKernel    # noqa: E402
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """The CLI surface as a factory, so selftests can parse without booting."""
     parser = argparse.ArgumentParser(
         prog="jarvis", description="Jarvis OS - self-evolving local Agentic OS")
     parser.add_argument("--config", default=None, help="path to config.json")
@@ -52,6 +63,67 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--voice", action="store_true",
                         help="start the background voice daemon for this session only")
     parser.add_argument("--honorific", default=None, help="override the honorific")
+    # --- one-shot software / control actions (session-scoped, exit after) ---
+    parser.add_argument("--build", default="", metavar="SPEC",
+                        help="build software from a one-line spec, then exit")
+    parser.add_argument("--install", default="", metavar="PROGRAM-ID",
+                        help="install a built program by id, then exit")
+    parser.add_argument("--launch", default="", metavar="PROGRAM-ID",
+                        help="launch an installed program, then exit")
+    parser.add_argument("--control", nargs="+", default=None, metavar="ARGS",
+                        help="control a program: <id> [start|stop|restart|status|"
+                             "inspect|logs|configure|signal], or 'gui <ocr|"
+                             "click_text|type_text>' for the desktop")
+    parser.add_argument("--stop", default="", metavar="PROGRAM-ID",
+                        help="stop a running program, then exit")
+    parser.add_argument("--tools", action="store_true",
+                        help="list the registered tool registry, then exit")
+    return parser
+
+
+def _report(kernel: JarvisKernel, result: object) -> int:
+    """Print one action verdict through the text interface; 0 when ok."""
+    iface = kernel.text_iface
+    if isinstance(result, dict):
+        if result.get("ok"):
+            message = result.get("message") or json.dumps(
+                result.get("program", result), ensure_ascii=False)[:800]
+            iface.say(str(message))
+            return 0
+        if result.get("denied"):
+            iface.say("Permission denied by operator, Sir. Nothing was changed.")
+            return 1
+        iface.say(f"Failed: {result.get('error', 'unknown error')}")
+        return 1
+    iface.say(str(result))
+    return 0
+
+
+def _run_action(kernel: JarvisKernel, args: argparse.Namespace) -> int:
+    """Dispatch one one-shot action flag. The kernel is already booted."""
+    if args.tools:
+        kernel.text_iface.plain(kernel.tools.describe())
+        return 0
+    if args.build:
+        return _report(kernel, kernel.software.build(args.build))
+    if args.install:
+        return _report(kernel, kernel.software.install(args.install))
+    if args.launch:
+        return _report(kernel, kernel.software.launch(args.launch))
+    if args.control:
+        if args.control[0].lower() == "gui":
+            # Desktop commands address the screen, not a registered program.
+            return _report(kernel, kernel.control.dispatch("", "gui",
+                                                           args.control[1:]))
+        program_id, rest = args.control[0], args.control[1:]
+        action = rest[0].lower() if rest else "status"
+        return _report(kernel, kernel.software.control(program_id, action,
+                                                       rest[1:]))
+    return _report(kernel, kernel.software.control(args.stop, "stop"))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     config = Config(args.config)
@@ -72,12 +144,25 @@ def main(argv: list[str] | None = None) -> int:
         config.set_feature("background_daemon", True, persist=False)
     if args.cycles:
         config.set("loop.max_cycles", int(args.cycles), persist=False)
+    if args.tools or args.build or args.install or args.launch \
+            or args.control or args.stop:
+        # Session-scoped enable for the one-shot action flags: the kernel sees
+        # both features on at boot; persist=False keeps config.json untouched.
+        config.set_feature("software_factory", True, persist=False)
+        config.set_feature("control_bridge", True, persist=False)
 
     if args.overseer:
         from jarvis_os.overseer import run_overseer
         return run_overseer(args.config)
 
     kernel = JarvisKernel(config, honorific=args.honorific)
+
+    if args.tools or args.build or args.install or args.launch \
+            or args.control or args.stop:
+        try:
+            return _run_action(kernel, args)
+        finally:
+            kernel.shutdown()
 
     if args.goal:
         kernel.text_iface.say(kernel.execute(args.goal, source="cli"))

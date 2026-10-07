@@ -121,6 +121,24 @@ class ToolRegistry:
             permission_category="code_exec", dangerous=True, builtin=False, replace=True,
         )
 
+    def register_validated(self, name: str, source: str, description: str,
+                           *, parameters: dict[str, Any] | None = None,
+                           attr: str = "run",
+                           probe_args: dict[str, Any] | None = None,
+                           category: str = "code_exec",
+                           replace: bool = False) -> dict[str, Any]:
+        """Load raw source as a tool only after the full validation chain.
+
+        Delegates to :func:`jarvis_os.tool_registry.validate_and_register`:
+        static AST denylist -> mandatory ``skill_add`` gate -> sandbox probe
+        -> registration as a dangerous ``code_exec`` tool. Returns the verdict
+        dict instead of raising, so callers can surface the failing stage.
+        """
+        from .tool_registry import validate_and_register
+        return validate_and_register(
+            self, name, source, description, parameters=parameters, attr=attr,
+            probe_args=probe_args, category=category, replace=replace)
+
     def unregister(self, name: str) -> bool:
         tool = self._tools.pop(name, None)
         if tool and self.audit:
@@ -278,12 +296,13 @@ class ToolRegistry:
         self.register(
             "ui_control", _ui_run,
             "Control the OS UI with pyautogui: click, type, hotkey, press, "
-            "scroll, screenshot (pyautogui FailSafe stays on).",
+            "scroll, screenshot, OCR screen text, click a phrase on screen "
+            "(pyautogui FailSafe stays on; OCR needs Tesseract + pytesseract).",
             {"type": "object", "properties": {
                 "action": {"type": "string",
                            "description": "position | move | click | doubleclick | "
                                           "rightclick | type | hotkey | press | "
-                                          "scroll | screenshot"},
+                                          "scroll | screenshot | ocr | click_text"},
                 "x": {"type": "number"}, "y": {"type": "number"},
                 "text": {"type": "string"},
                 "keys": {"type": "array", "items": {"type": "string"}},

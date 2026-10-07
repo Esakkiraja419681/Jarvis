@@ -26,7 +26,7 @@ from typing import Any, Callable
 from .agents import Agent, AgentRegistry
 from .audit import AuditLedger
 from .config import Config
-from .control import ControlBridge
+from .control_bridge import ControlBridge
 from .daemon import BackgroundDaemon
 from .devices import DeviceManager
 from .evolution import SelfEvolution

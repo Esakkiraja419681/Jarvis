@@ -28,9 +28,13 @@ vosk>=0.3.45
 sounddevice>=0.4.6
 
 # --- OS UI control (optional) ---------------------------------------------
-# Powers the gated `ui_control` tool (click/type/hotkey/scroll/screenshot).
+# Powers the gated `ui_control` tool (click/type/hotkey/scroll/screenshot and
+# the ocr / click_text actions behind `--control gui`).
 # Imported lazily inside jarvis_os/ui.py, so the core boots without it.
 pyautogui>=0.9.54
+pytesseract>=0.3.10         # Python wrapper only: the Tesseract OCR ENGINE must
+                            # be installed separately for `ocr` to work; ui_control
+                            # degrades to an actionable error until then.
 
 # --- Local translation fallback (optional, heavy) ------------------------
 # Only needed if you want the neural offline translator instead of Argos.
