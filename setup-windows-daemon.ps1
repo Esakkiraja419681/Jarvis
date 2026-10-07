@@ -33,7 +33,11 @@ function Register-Task {
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+    try {
+        Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+    } catch {
+        throw "Register-ScheduledTask failed: $($_.Exception.Message) - run PowerShell as Administrator to register."
+    }
     Write-Msg "registered '$TaskName' (at logon, interactive session, pythonw jarvis.py --daemon --voice)."
 }
 function Get-DaemonProcesses {
