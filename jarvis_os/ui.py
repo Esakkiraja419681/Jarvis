@@ -57,6 +57,9 @@ def run(action: str = "", **kwargs: Any) -> dict[str, Any]:
     if action not in ACTIONS:
         return {"ok": False, "error":
                 f"unknown action {action!r}; use one of: {', '.join(ACTIONS)}"}
+    if action == "click_text" and not str(kwargs.get("text", "")).strip():
+        return {"ok": False, "action": action,
+                "error": "click_text needs text=<phrase on screen>"}
     try:
         import pyautogui
     except Exception as exc:  # noqa: BLE001 - display-less sessions fail here
@@ -64,6 +67,7 @@ def run(action: str = "", **kwargs: Any) -> dict[str, Any]:
                 f"pyautogui unavailable ({type(exc).__name__}: {exc}) - run "
                 "setup-windows-daemon.ps1 -Action install, Sir."}
     if action in ("ocr", "click_text"):
+        needle = str(kwargs.get("text", "")).strip().lower()
         pytesseract, t_err = _tesseract()
         if t_err is not None:
             return {**t_err, "action": action}
@@ -81,10 +85,6 @@ def run(action: str = "", **kwargs: Any) -> dict[str, Any]:
             return {"ok": True, "action": "ocr", "text": " ".join(words),
                     "words": len(words)}
         # action == "click_text"
-        needle = str(kwargs.get("text", "")).strip().lower()
-        if not needle:
-            return {"ok": False, "action": action,
-                    "error": "click_text needs text=<phrase on screen>"}
         match = next((i for i, t in enumerate(texts) if t.strip().lower() == needle),
                      None)
         if match is None:
