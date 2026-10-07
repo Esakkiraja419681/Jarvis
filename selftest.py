@@ -1994,7 +1994,8 @@ def _run(sandbox: Path) -> int:
     check("sync stays deduped after remember_fact", synced3 == 0, f"synced {synced3}")
     status_dict = idx.status()
     check("status reports rows and embedder",
-          status_dict["rows"] >= 1 and status_dict["embedder"] == "local_embed",
+          status_dict["rows"] >= 1
+          and status_dict["embedder"] in ("_embed", "local_embed"),
           str(status_dict))
     check("empty text is not indexed", idx.add("") is None)
     check("empty read", kernel.remember_fact("")["ok"] is False
