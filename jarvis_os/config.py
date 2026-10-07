@@ -287,8 +287,11 @@ class Config:
         value = self.get(f"features.{name}", default)
         return bool(value) if isinstance(value, bool) else default
 
-    def set_feature(self, name: str, enabled: bool) -> "Config":
-        return self.set(f"features.{name}", bool(enabled))
+    def set_feature(self, name: str, enabled: bool, persist: bool = True) -> "Config":
+        # persist=False is for session-scoped overrides (CLI flags): a one-off
+        # `--no-overseer` or `--daemon` must not rewrite config.json, or the
+        # next boot inherits a setting the operator never chose.
+        return self.set(f"features.{name}", bool(enabled), persist=persist)
 
     def feature_names(self) -> Iterable[str]:
         return sorted(self.get_dict("features").keys())

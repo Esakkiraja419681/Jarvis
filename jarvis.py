@@ -54,14 +54,18 @@ def main(argv: list[str] | None = None) -> int:
 
     config = Config(args.config)
 
+    # Every flag below is a SESSION override, never a config write: persisting
+    # them would let a one-off smoke run permanently rewrite the machine - a
+    # single `--cycles 2` would cap the infinite loop forever, and a `--daemon`
+    # or `--no-overseer` test would leave the watchdog off on every next boot.
     if args.no_overseer:
-        config.set_feature("overseer", False)
+        config.set_feature("overseer", False, persist=False)
     if args.no_voice:
-        config.set_feature("voice", False)
+        config.set_feature("voice", False, persist=False)
     if args.daemon:
-        config.set_feature("background_daemon", True)
+        config.set_feature("background_daemon", True, persist=False)
     if args.cycles:
-        config.set("loop.max_cycles", int(args.cycles))
+        config.set("loop.max_cycles", int(args.cycles), persist=False)
 
     if args.overseer:
         from jarvis_os.overseer import run_overseer

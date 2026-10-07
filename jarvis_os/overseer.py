@@ -481,6 +481,14 @@ class OverseerAgenticOS:
         if self.auto_restart:
             incident.restarted = self.restart_jarvis(reason=f"overseer repair {incident.incident_id}")
         incident.resolved = True
+        if incident.restarted and not incident.halted:
+            # Isolation lasts for the fault, not forever. A fault that never
+            # halted Jarvis and was remediated by a restart has no ongoing
+            # investigation to enforce: keeping the instruction file would
+            # quarantine the layer across every future boot for an incident
+            # that is already over. The halt path keeps its isolation - the
+            # repair clears it only when a rewrite actually lands.
+            self._clear_control()
         if self.audit:
             self.audit.record(
                 "overseer", f"resolved:{fault}", "ok",

@@ -218,16 +218,25 @@ class JarvisKernel:
             else:
                 applied.append("gate_rearmed_after_restart")
         if control.get("sandbox_enabled") is False:
-            self.config.set("features.sandbox", False)
+            # persist=False: the control FILE is the durable channel for an
+            # isolation (it is re-applied on every boot while it exists). Bake
+            # the isolation into config.json as well and it outlives the
+            # incident, silently crippling every future boot after the fault
+            # that caused it is long gone.
+            self.config.set("features.sandbox", False, persist=False)
             applied.append("sandbox_disabled")
         if control.get("tools_disabled"):
             applied.append("tools_disabled")
         if control.get("planner_disabled"):
             applied.append("planner_disabled")
         if control.get("loop_interval_max"):
+            # Session-scoped like sandbox_disabled above: the control file
+            # carries the cap across boots, config.json must stay the
+            # operator's own setting.
             self.config.set("loop.interval_seconds",
                             min(int(control["loop_interval_max"]),
-                                int(self.config.get("loop.interval_seconds", 5)) * 12))
+                                int(self.config.get("loop.interval_seconds", 5)) * 12),
+                            persist=False)
             applied.append("loop_interval_max")
         if applied:
             self.audit.record("kernel", "overseer_control_applied", "ok",
@@ -390,6 +399,14 @@ class JarvisKernel:
         backoff = float(self.config.get("loop.backoff_on_error_seconds", 15))
         max_cycles = int(self.config.get("loop.max_cycles", 0))
         self.set_mode("daemon")
+        # Beat continuously, not once per cycle. The sleep between two cycles
+        # can outlast the Overseer's stall timeout (a 60s interval against a
+        # 45s threshold), so a perfectly healthy idle loop looked dead: the
+        # watchdog opened a stall incident, "repaired" it, and the restart
+        # callback reset cycles to 0 - after which max_cycles could never be
+        # reached and the loop ran forever. Liveness must not depend on how
+        # long the loop sleeps, so the refresher thread owns the beat.
+        self.start_heartbeat_refresher()
         self.audit.record("kernel", "loop_start", "ok",
                           {"interval": interval, "pid": os.getpid(),
                            "mode": self._mode})
@@ -442,6 +459,11 @@ class JarvisKernel:
         two honest shapes of the output.
         """
         self.last_goal = goal
+        # A single goal can run for minutes (LLM timeouts alone reach 120s),
+        # well past the stall threshold. In the REPL the refresher is already
+        # up; in the --goal path this is what keeps a long-running execution
+        # from looking like a dead process to the Overseer. Idempotent.
+        self.start_heartbeat_refresher()
         english, detection = self.language.process_inbound(goal)
         self.audit.record("kernel", "execute", "start",
                           {"goal": goal[:300], "source": source,
@@ -702,6 +724,9 @@ class JarvisKernel:
 
     # -------------------------------------------------------------- shutdown
     def shutdown(self) -> None:
+        # Stop beating first: once the Overseer stops, a late beat from the
+        # refresher would race against a half-closed watchdog.
+        self.stop_heartbeat_refresher()
         try:
             self.control.shutdown_all()
         except Exception:  # noqa: BLE001
