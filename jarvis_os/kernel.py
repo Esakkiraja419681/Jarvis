@@ -175,6 +175,14 @@ class JarvisKernel:
         self.overseer = OverseerAgenticOS(cfg, audit=self.audit, memory=self.memory,
                                           llm=self.llm, gate=self.gate, root=cfg.root)
         self.overseer.bind_restart(self._overseer_restart)
+        # Beat before the Overseer's scan thread exists. start() launches that
+        # thread, and its first scan() runs immediately - so a process whose
+        # heartbeat file did not exist yet found no beat and opened a
+        # no_heartbeat incident against itself, blaming the interface layer,
+        # on every single boot. Publishing our own first beat here is what makes
+        # "the supervised process is alive" true from the moment the kernel
+        # exists rather than one heartbeat interval later.
+        self._write_heartbeat()
         if cfg.feature("overseer", True):
             self.overseer.start()
 

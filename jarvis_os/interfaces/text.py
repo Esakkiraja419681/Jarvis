@@ -83,10 +83,14 @@ class TextCommandInterface:
 
     def start(self) -> int:
         self.running = True
+        # Claim the mode *before* the first beat. start_heartbeat_refresher()
+        # writes one heartbeat synchronously, so starting it first published
+        # "foreground" for a session that was, from that instant, interactive -
+        # and the Overseer read a wrong mode for a whole interval.
+        self.kernel.set_mode("interactive")
         # Start beating before the banner so the Overseer has a live, owned pid
         # to supervise from the very first moment, not only once a command runs.
         self.kernel.start_heartbeat_refresher()
-        self.kernel.set_mode("interactive")
         self.banner()
         try:
             while self.running:
