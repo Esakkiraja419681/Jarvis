@@ -6,6 +6,8 @@
     python jarvis.py --daemon        # detached background mode
     python jarvis.py --overseer      # run the Overseer watchdog on its own
     python jarvis.py --goal "..."    # run one goal, then exit
+    python jarvis.py --plan "..."    # decompose a goal into a step DAG, print, exit
+    python jarvis.py --remember "..."  # store a fact in memory + local index, exit
     python jarvis.py --attach        # recall a running background instance
 
     python jarvis.py --build "spec"           # build software, then exit
@@ -97,6 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--to", default="", choices=("en", "ta"),
                         help="target language for --translate (default: your "
                              "preferred language)")
+    # --- one-shot planner / memory actions (session-scoped, exit after) -----
+    parser.add_argument("--plan", default="", metavar="GOAL",
+                        help="decompose a goal into a step DAG and print it "
+                             "without executing, then exit")
+    parser.add_argument("--remember", default="", metavar="TEXT",
+                        help="store a fact in memory and the local vector "
+                             "index, then exit")
     return parser
 
 
@@ -150,6 +159,12 @@ def _run_action(kernel: JarvisKernel, args: argparse.Namespace) -> int:
     if args.translate is not None:
         return _report(kernel, kernel.language_layer.translate(
             " ".join(args.translate), args.to))
+    if args.plan:
+        plan, _strategy = kernel.planner.decompose(args.plan)
+        kernel.text_iface.plain(kernel.planner.render(plan))
+        return 0
+    if args.remember:
+        return _report(kernel, kernel.remember_fact(args.remember))
     return _report(kernel, kernel.software.control(args.stop, "stop"))
 
 
@@ -198,7 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         args.tools or args.build or args.install or args.launch
         or args.control or args.stop
         or args.device is not None or args.sync is not None
-        or args.translate is not None)
+        or args.translate is not None
+        or args.plan or args.remember)
 
     if one_shot:
         # Session-scoped enable for the one-shot action flags: the kernel sees

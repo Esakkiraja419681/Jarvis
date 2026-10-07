@@ -59,6 +59,8 @@ _LIVE_STATE_FILES = (
     "data/lessons.jsonl",
     "data/actions.jsonl",
     "data/audit_ledger.jsonl",
+    "data/memory_index.db",
+    "data/plan_state.json",
 )
 
 _DATA_PATHS = (
@@ -82,6 +84,8 @@ _DATA_PATHS = (
     "sandbox.workdir",
     "device_manager.tls_dir",
     "device_manager.pairing_token_path",
+    "memory_index.sqlite_path",
+    "planner.state_path",
 )
 
 
@@ -103,7 +107,11 @@ def sandbox_config(root: Path, live: Path) -> Config:
     if not isinstance(raw, dict):
         raw = {}
 
-    for dotted in ("device_manager.tls_dir", "device_manager.pairing_token_path"):
+    # Seed every configured data path from _DEFAULTS when the live config
+    # lacks it: resolve() falls back to root-relative paths, and root is the
+    # repo - so an unseeded new key (memory_index, planner) would land its
+    # database or state file in the operator's tree mid-run.
+    for dotted in _DATA_PATHS:
         parts = dotted.split(".")
         node = raw
         for part in parts[:-1]:
@@ -1441,6 +1449,17 @@ def _run(sandbox: Path) -> int:
     check("--translate parses text and target",
           ns.translate == ["vanakkam"] and ns.to == "en",
           f"{ns.translate} to={ns.to}")
+    ns = parser.parse_args(["--plan", "clean the workbench"])
+    check("--plan parses a goal string",
+          ns.plan == "clean the workbench" and not ns.remember, repr(ns.plan))
+    ns = parser.parse_args(["--remember", "Sir upgraded the workshop"])
+    check("--remember parses a fact string",
+          ns.remember == "Sir upgraded the workshop" and not ns.plan,
+          repr(ns.remember))
+    ns = parser.parse_args([])
+    check("one-shot plan/remember flags default to inert",
+          not ns.plan and not ns.remember,
+          f"plan={ns.plan!r} remember={ns.remember!r}")
     check("build_parser exposes a callable factory",
           callable(getattr(jarvis_cli, "build_parser", None)))
 
@@ -1801,6 +1820,313 @@ def _run(sandbox: Path) -> int:
           _raises(lambda: kernel.llm.assert_local("https://api.openai.com/v1")))
     check("ollama itself still reachable-or-clean",
           isinstance(kernel.llm.available(), bool))
+
+    print("\n== goal planner ==")
+    from jarvis_os.planner import GoalPlanner, Plan, PlanStep
+
+    pl = GoalPlanner(config, llm=None, gate=kernel.gate,
+                     audit=kernel.audit, memory=None)
+    fplan, fstrategy = pl.decompose("write a status report")
+    check("heuristic fallback decomposes offline",
+          fstrategy == "heuristic" and len(fplan.steps) >= 2, fstrategy)
+    check("step ids are unique and non-empty",
+          len({s.step_id for s in fplan.steps}) == len(fplan.steps))
+    ok_plan, reason_plan = pl.validate(fplan)
+    check("heuristic plan validates", ok_plan and not reason_plan,
+          reason_plan)
+    rendered = pl.render(fplan)
+    check("render shows the plan and every step id",
+          rendered.startswith("Plan: write a status report")
+          and all(s.step_id in rendered for s in fplan.steps), rendered[:300])
+    check("keyword hazard found first",
+          GoalPlanner.classify_hazard("delete the old backups") == "file_delete")
+    check("llm may add a category",
+          GoalPlanner.classify_hazard("tidy up the shelf", "shell_exec") == "shell_exec")
+    check("llm cannot strip a keyword hit",
+          GoalPlanner.classify_hazard("delete the old backups", "software_install")
+          == "file_delete")
+    check("clean objective has no hazard",
+          GoalPlanner.classify_hazard("summarise the logbook") == "")
+    check("llm cannot invent a category",
+          GoalPlanner.classify_hazard("tidy up the shelf", "made_up") == "")
+    iplan, _istrategy = pl.decompose("install the widget")
+    check("heuristic steps carry keyword hazards",
+          iplan.steps[0].hazard == "shell_exec" and iplan.steps[-1].hazard == "",
+          str([(s.step_id, s.hazard) for s in iplan.steps]))
+    cycle = Plan(goal="cycle", steps=[
+        PlanStep(step_id="a", objective="x", depends_on=["b"]),
+        PlanStep(step_id="b", objective="y", depends_on=["a"])])
+    check("dependency cycle refused",
+          pl.validate(cycle) == (False, "dependency cycle detected"))
+    ghost = Plan(goal="ghost", steps=[
+        PlanStep(step_id="a", objective="x", depends_on=["ghost"])])
+    check("unknown dependency refused",
+          pl.validate(ghost)[0] is False and "unknown" in pl.validate(ghost)[1])
+    lone = Plan(goal="lone", steps=[
+        PlanStep(step_id="solo", objective="x", depends_on=["solo"])])
+    check("self dependency refused", pl.validate(lone)[0] is False
+          and "itself" in pl.validate(lone)[1])
+    empty_plan = Plan(goal="empty")
+    check("empty plan refused", pl.validate(empty_plan) == (False, "plan has no steps"))
+    dup_plan = Plan(goal="dup", steps=[
+        PlanStep(step_id="a", objective="1"),
+        PlanStep(step_id="a", objective="2")])
+    check("duplicate ids refused", pl.validate(dup_plan) == (False, "duplicate step ids"))
+    res_x = pl.execute(cycle, runner=lambda s: "x")
+    check("invalid plan refuses to execute",
+          not res_x.ok and res_x.error.startswith("invalid plan:"), res_x.error)
+    res_n = pl.execute(fplan, runner=None)
+    check("missing runner refused", not res_n.ok and "no runner" in res_n.error,
+          res_n.error)
+    res_main = pl.execute(fplan, runner=lambda s: "ok")
+    check("execute runs every step",
+          res_main.ok and res_main.steps_done == len(fplan.steps)
+          and all(s.status == "done" for s in fplan.steps), str(res_main.to_dict()))
+    check("outputs collected per step",
+          set(res_main.outputs) == {s.step_id for s in fplan.steps},
+          str(res_main.outputs))
+    fp = Plan(goal="failprop")
+    fa = fp.add("first thing")
+    fb = fp.add("second thing", depends_on=[fa.step_id])
+    res_f = pl.execute(fp, runner=lambda s:
+                       {"ok": False, "error": "boom"} if s.step_id == fa.step_id
+                       else "ok")
+    check("failed step blocks its dependents",
+          res_f.steps_failed == 1 and res_f.steps_blocked == 1
+          and not res_f.ok and res_f.error == "boom", str(res_f.to_dict()))
+    check("blocked step carries its blocker", "blocked by" in fb.error, fb.error)
+    raise_plan = Plan(goal="raise")
+    raise_plan.add("will raise")
+    res_r = pl.execute(raise_plan, runner=lambda s: (_ for _ in ()).throw(
+        ValueError("kaput")))
+    check("runner exception fails a single step",
+          res_r.steps_failed == 1 and not res_r.ok
+          and "kaput" in res_r.error, str(res_r.to_dict()))
+    budget_plan, _bs = pl.decompose("research the logbook and write a summary")
+    res_b = pl.execute(budget_plan, runner=lambda s: "ok", max_steps=1)
+    check("step budget skips the rest",
+          res_b.steps_skipped >= 1 and not res_b.ok, str(res_b.to_dict()))
+    dyn = Plan(goal="grow")
+    dyn.add("do the first thing")
+    dyn_added = {"done": False}
+    def grow_runner(step):
+        if not dyn_added["done"]:
+            dyn_added["done"] = True
+            dyn.add("appended while running")
+        return "ok"
+    res_g = pl.execute(dyn, runner=grow_runner)
+    check("runner-appended step joins the run",
+          res_g.steps_done == 2 and res_g.ok, str(res_g.to_dict()))
+    hz_plan = Plan(goal="wipe the stale backups")
+    hz_step = hz_plan.add("delete the stale backup files", hazard="file_delete")
+    kernel.gate._text_input = lambda prompt: "no"
+    try:
+        res_d = pl.execute(hz_plan, runner=lambda s: "should-not-run")
+    finally:
+        kernel.gate._text_input = lambda prompt: "yes"
+    check("hazard step waits for the operator",
+          hz_step.status == "denied" and res_d.steps_denied == 1 and not res_d.ok,
+          str(res_d.to_dict()))
+    check("denied step never reaches the runner",
+          "should-not-run" not in str(res_d.outputs), str(res_d.outputs))
+    check("denied step renders as such", "[D]" in pl.render(hz_plan))
+    ok_plan2 = Plan(goal="retire the stale backups")
+    ok_step = ok_plan2.add("remove the stale backup files", hazard="file_delete")
+    res_a = pl.execute(ok_plan2, runner=lambda s: "ran")
+    check("approved hazard step executes",
+          ok_step.status == "done" and res_a.ok, str(res_a.to_dict()))
+    pp, _ps = pl.decompose("research and write a report")
+    res_p = pl.execute(pp, runner=lambda s: "done")
+    check("execute writes plan state", pl.state_path.is_file(), res_p.error)
+    loaded = pl.load_state()
+    check("plan state round-trips",
+          loaded is not None and loaded.goal == pp.goal
+          and len(loaded.steps) == len(pp.steps)
+          and all(s.status == "done" for s in loaded.steps),
+          str(loaded.to_dict() if loaded else None))
+    pl.state_path.write_text("{broken", encoding="utf-8")
+    check("corrupt plan state reads as None", pl.load_state() is None)
+    res_run = pl.run("write a greeting script", runner=lambda s: "ok")
+    check("run() decomposes and executes",
+          res_run.ok and res_run.steps_done >= 1, str(res_run.to_dict()))
+    check("history retains recent runs", len(pl.history) >= 3)
+    kplan, kstrategy = kernel.planner.decompose("summarise the logbook")
+    check("kernel planner falls back to heuristic offline",
+          kstrategy == "heuristic" and len(kplan.steps) >= 1, kstrategy)
+    kstat = kernel.planner.status()
+    check("kernel planner wired and sandboxed",
+          isinstance(kernel.planner, GoalPlanner)
+          and str(kernel.planner.state_path).lower().startswith(str(sandbox).lower()),
+          kstat)
+
+    print("\n== memory index ==")
+    from jarvis_os.memory_index import MemoryIndex, content_id
+
+    idx = kernel.memory_index
+    check("memory index booted in the sandbox",
+          str(idx.sqlite_path).lower().startswith(str(sandbox).lower()),
+          str(idx.sqlite_path))
+    synced1 = idx.sync_from(kernel.memory)
+    check("index mirrors live memory", synced1 >= 1, f"synced {synced1}")
+    synced2 = idx.sync_from(kernel.memory)
+    check("sync is idempotent", synced2 == 0, f"synced {synced2}")
+    fact_text = "Jarvis was configured by Sir on a Wednesday."
+    rows_before = idx.count()
+    stored = kernel.remember_fact(fact_text)
+    check("remember_fact mirrors into the index",
+          stored.get("ok") and stored.get("indexed") is True
+          and stored.get("rows") == rows_before + 1, str(stored))
+    row_id = content_id("fact", fact_text)
+    hits = idx.search("Jarvis was configured by Sir", limit=50)
+    check("content-addressed row is searchable",
+          any(h["id"] == row_id and h["kind"] == "fact" for h in hits),
+          str([h["text"] for h in hits]))
+    check("context block is non-empty", bool(idx.context(fact_text)))
+    kinds = idx.kinds()
+    check("kinds include fact", "fact" in kinds, str(kinds))
+    check("content_id is deterministic", content_id("fact", fact_text) == row_id)
+    dups_before = idx.duplicates
+    again = kernel.remember_fact(fact_text)
+    check("re-remember is content-deduped",
+          again.get("rows") == rows_before + 1 and idx.duplicates == dups_before + 1,
+          str(again))
+    synced3 = idx.sync_from(kernel.memory)
+    check("sync stays deduped after remember_fact", synced3 == 0, f"synced {synced3}")
+    status_dict = idx.status()
+    check("status reports rows and embedder",
+          status_dict["rows"] >= 1 and status_dict["embedder"] == "local_embed",
+          str(status_dict))
+    check("empty text is not indexed", idx.add("") is None)
+    check("empty read", kernel.remember_fact("")["ok"] is False
+          and "nothing to remember" in kernel.remember_fact("")["error"])
+    solo = MemoryIndex(sandbox / "data" / "index_solo.db").open()
+    solo_row = solo.add("a standalone fact for the solo index")
+    check("standalone index inserts", solo.count() == 1 and solo_row is not None)
+    solo.add("a standalone fact for the solo index")
+    check("standalone index dedups", solo.count() == 1 and solo.duplicates == 1)
+    solo.close()
+    reopened_idx = MemoryIndex(sandbox / "data" / "index_solo.db").open()
+    check("standalone index survives reopen", reopened_idx.count() == 1)
+    reopened_idx.close()
+
+    print("\n== overseer components & state integrity ==")
+    test_ov = OverseerAgenticOS(config, audit=kernel.audit, memory=None, llm=None,
+                                gate=kernel.gate, root=sandbox)
+    test_ov.halt_on_fault = False
+    test_ov.bind_restart(lambda: None)
+    restarts = {"n": 0}
+    healthy = {"ok": True}
+    def always_healthy() -> bool:
+        return bool(healthy["ok"])
+    def probe_restart() -> None:
+        restarts["n"] += 1
+    test_ov.bind_component("probe", always_healthy, probe_restart)
+    check("healthy component reports nothing", test_ov.check_components() == [])
+    healthy["ok"] = False
+    comp_faults = test_ov.check_components()
+    check("unhealthy component fires once",
+          len(comp_faults) == 1 and comp_faults[0]["fault"] == "component_crash"
+          and comp_faults[0]["component"] == "probe", str(comp_faults))
+    for attempt in range(1, 4):
+        incident = test_ov.handle_fault("component_crash", "execution",
+                                        "component 'probe' is unhealthy",
+                                        component="probe")
+        check(f"component restart attempt {attempt} recovers",
+              incident.resolved and incident.restarted
+              and f"({attempt}/3)" in incident.action_taken,
+              incident.action_taken)
+    check("component restart budget counted",
+          test_ov._component_restarts.get("probe") == 3 and restarts["n"] == 3)
+    escalated = test_ov.handle_fault("component_crash", "execution",
+                                     "component 'probe' is unhealthy",
+                                     component="probe")
+    check("budget exhaustion leaves restarts untouched",
+          restarts["n"] == 3 and test_ov._component_restarts.get("probe") == 3)
+    check("budget exhaustion escalates to the operator",
+          any(e["action"] == "component_crash" and e["decision"] == "escalated"
+              for e in kernel.audit.tail(limit=200, category="overseer")))
+    check("escalated component goes quiet", test_ov.check_components() == [])
+    healthy["ok"] = True
+    check("recovery resets the episode",
+          test_ov.check_components() == []
+          and test_ov._component_restarts.get("probe") == 0)
+    healthy["ok"] = False
+    check("relapse starts a fresh episode", len(test_ov.check_components()) == 1)
+    healthy["ok"] = True
+
+    daemon_state = sandbox / "data" / "daemon_state.json"
+    daemon_state.parent.mkdir(parents=True, exist_ok=True)
+    daemon_state.unlink(missing_ok=True)
+    check("absent daemon state is not a fault", test_ov.check_daemon_health() == [])
+    daemon_state.write_text("{not json", encoding="utf-8")
+    check("corrupt daemon state reported",
+          any("corrupt" in f for f in test_ov.check_daemon_health()))
+    daemon_state.write_text(json.dumps({"mode": "background", "pid": 999999}),
+                            encoding="utf-8")
+    check("dead background daemon reported",
+          any("dead" in f for f in test_ov.check_daemon_health()))
+    daemon_state.write_text(json.dumps({"mode": "background", "pid": os.getpid()}),
+                            encoding="utf-8")
+    check("live background daemon accepted", test_ov.check_daemon_health() == [])
+    daemon_state.write_text(json.dumps({"mode": "foreground", "pid": 999999}),
+                            encoding="utf-8")
+    check("non-background mode skips the pid check",
+          test_ov.check_daemon_health() == [])
+    daemon_state.write_text(json.dumps({"mode": "background", "pid": 999999}),
+                            encoding="utf-8")
+    daemon_report = test_ov.scan()
+    check("daemon fault surfaces through scan",
+          any("daemon" in f["evidence"] and f["layer"] == "execution"
+              for f in daemon_report["faults"]), str(daemon_report["faults"]))
+    daemon_state.unlink(missing_ok=True)
+
+    control_path = config.resolve(config.get("overseer.control_file",
+                                             "data/overseer_control.json"))
+    hb_path = kernel.overseer.heartbeat_path
+    cfg_path = Path(config.path)
+    saved_state = {p: (p.read_bytes() if p.is_file() else None)
+                   for p in (control_path, hb_path, cfg_path)}
+    def restore_state() -> None:
+        for path, data in saved_state.items():
+            if data is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(data)
+    try:
+        check("clean state passes integrity", test_ov.check_state_integrity() == [])
+        control_path.write_text("{broken", encoding="utf-8")
+        ctrl_findings = test_ov.check_state_integrity()
+        check("corrupt control file reported",
+              any("control file" in f for f in ctrl_findings), str(ctrl_findings))
+        control_path.unlink(missing_ok=True)
+        check("missing control file is fine",
+              not any("control" in f for f in test_ov.check_state_integrity()))
+        hb_path.write_text("[]", encoding="utf-8")
+        hb_findings = test_ov.check_state_integrity()
+        check("non-object heartbeat reported",
+              any("heartbeat" in f for f in hb_findings), str(hb_findings))
+        cfg_path.write_text("null", encoding="utf-8")
+        cfg_findings = test_ov.check_state_integrity()
+        check("corrupt config reported",
+              any("config file" in f for f in cfg_findings), str(cfg_findings))
+    finally:
+        restore_state()
+    check("state restored after integrity probes",
+          test_ov.check_state_integrity() == []
+          and json.loads(cfg_path.read_text(encoding="utf-8")) is not None)
+
+    prev_halt = kernel.overseer.halt_on_fault
+    kernel.overseer.halt_on_fault = False
+    try:
+        hb_path.write_text("{corrupt", encoding="utf-8")
+        scan_faults = [f["fault"] for f in kernel.overseer.scan()["faults"]]
+    finally:
+        hb_path.write_bytes(saved_state[hb_path] or b"{}")
+        kernel.overseer.halt_on_fault = prev_halt
+    check("corrupt heartbeat suppresses no_heartbeat",
+          "no_heartbeat" not in scan_faults, str(scan_faults))
+    check("corrupt heartbeat still faults as state_corrupt",
+          "state_corrupt" in scan_faults, str(scan_faults))
 
     print("\n== memory durability across restart ==")
     memory_snapshot = kernel.memory.stats["memories"]

@@ -105,6 +105,7 @@ _DEFAULTS: dict[str, Any] = {
         "auto_repair": True,
         "auto_restart": True,
         "max_repair_attempts": 3,
+        "max_component_restarts": 3,
     },
     "sandbox": {
         "python_executable": "python",
@@ -175,6 +176,16 @@ _DEFAULTS: dict[str, Any] = {
         "action_log": "data/actions.jsonl",
         "retrieval_top_k": 5,
         "immutable": True,
+    },
+    "memory_index": {
+        "sqlite_path": "data/memory_index.db",
+        "top_k": 5,
+        "context_budget_chars": 2000,
+        "sync_on_boot": True,
+    },
+    "planner": {
+        "state_path": "data/plan_state.json",
+        "max_steps": 12,
     },
     "audit": {
         "ledger_path": "data/audit_ledger.jsonl",

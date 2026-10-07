@@ -25,6 +25,11 @@ function Install-Dependencies {
         Write-Msg "model extracted to models\vosk-model-small-en-us-0.15"
     } else { Write-Msg "model already present." }
     Write-Msg "install complete."
+    $idxPath = Join-Path $Root "data\memory_index.db"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $idxPath) | Out-Null
+    $idxRows = python -c "import sys; sys.path.insert(0, r'$Root'); from jarvis_os.memory_index import MemoryIndex; i = MemoryIndex(r'$idxPath').open(); print(i.status()['rows']); i.close()"
+    if ($LASTEXITCODE -ne 0) { throw "memory index materialisation failed" }
+    Write-Msg "memory index: $idxRows row(s) at data\memory_index.db"
 }
 function Register-Task {
     $exe = (Get-Command pythonw -ErrorAction SilentlyContinue).Source
@@ -96,6 +101,13 @@ switch ($Action) {
         Write-Msg "deps: $deps"
         Write-Msg "tesseract engine: $(if (Get-Command tesseract -ErrorAction SilentlyContinue) { 'present' } else { 'MISSING (ui_control ocr needs the Tesseract OCR engine)' })"
         Write-Msg "vosk model: $(if (Test-Path (Join-Path $ModelDir 'am')) { 'present' } else { 'MISSING (run -Action install)' })"
+        $idxFile = Join-Path $Root "data\memory_index.db"
+        if (Test-Path $idxFile) {
+            $idxQ = python -c "import sys; sys.path.insert(0, r'$Root'); from jarvis_os.memory_index import MemoryIndex; i = MemoryIndex(r'$idxFile').open(); print('%d row(s)' % i.count()); i.close()"
+            Write-Msg "memory index: $idxQ at data\memory_index.db"
+        } else {
+            Write-Msg "memory index: not materialised (run -Action install)"
+        }
         if (Test-Path $StopFile) { Write-Msg "WARNING: data\STOP exists - stale stop request, run -Action start to clear" }
     }
 }

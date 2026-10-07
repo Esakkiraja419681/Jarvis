@@ -78,6 +78,7 @@ class Incident:
     repaired: bool = False
     restarted: bool = False
     resolved: bool = False
+    component: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,7 +86,7 @@ class Incident:
             "ts": self.ts, "evidence": self.evidence[:2000], "diagnosis": self.diagnosis,
             "action_taken": self.action_taken, "halted": self.halted,
             "repaired": self.repaired, "restarted": self.restarted,
-            "resolved": self.resolved,
+            "resolved": self.resolved, "component": self.component,
         }
 
 
@@ -116,10 +117,19 @@ class OverseerAgenticOS:
         self._restart_cb: Callable[[], Any] | None = None
         self._lock = threading.RLock()
         self.last_scan: dict[str, Any] = {}
+        self.max_component_restarts = int(config.get("overseer.max_component_restarts", 3))
+        self._components: dict[str, dict[str, Any]] = {}
+        self._component_restarts: dict[str, int] = {}
 
     # ------------------------------------------------------------- lifecycle
     def bind_restart(self, callback: Callable[[], Any]) -> None:
         self._restart_cb = callback
+
+    def bind_component(self, name: str, health: Callable[[], bool],
+                       restart: Callable[[], Any] | None = None) -> None:
+        """Register a supervised component and its recovery action."""
+        self._components[name] = {"health": health, "restart": restart,
+                                  "faulted": False}
 
     def start(self) -> None:
         if self.running:
@@ -317,6 +327,70 @@ class OverseerAgenticOS:
             findings.append(f"llm layer: base_url is not local ({base})")
         return findings[:10]
 
+    def check_daemon_health(self) -> list[str]:
+        """A daemon state file that claims a dead process is a fault."""
+        path = self.root / "data" / "daemon_state.json"
+        if not path.is_file():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            return ["daemon state file is corrupt or unreadable"]
+        if not isinstance(payload, dict):
+            return ["daemon state file is corrupt (not a JSON object)"]
+        if str(payload.get("mode", "")) == "background":
+            pid = payload.get("pid")
+            if not self._pid_alive(pid):
+                return [f"daemon state claims background pid {pid} but it is dead"]
+        return []
+
+    def check_state_integrity(self) -> list[str]:
+        """Control, heartbeat and config files must stay readable JSON objects."""
+        findings: list[str] = []
+        targets = (
+            (self.config.resolve(self.config.get(
+                "overseer.control_file", "data/overseer_control.json")), "control file"),
+            (self.heartbeat_path, "heartbeat file"),
+            (Path(self.config.path), "config file"),
+        )
+        for path, label in targets:
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+                findings.append(f"{label} is corrupt or unreadable ({path.name})")
+                continue
+            if not isinstance(payload, dict):
+                findings.append(f"{label} is corrupt (not a JSON object) ({path.name})")
+        return findings
+
+    def check_components(self) -> list[dict[str, Any]]:
+        """Health-check every bound component; report once per unhealthy episode.
+
+        A healthy probe resets the episode. An unhealthy one fires immediately,
+        then again on every scan until its restart budget is spent - at which
+        point handle_fault() marks the episode escalated and the component goes
+        quiet until it becomes healthy again.
+        """
+        faults: list[dict[str, Any]] = []
+        for name, comp in list(self._components.items()):
+            try:
+                healthy = bool(comp["health"]())
+                detail = ""
+            except Exception as exc:  # noqa: BLE001 - a raising probe is unhealthy
+                healthy, detail = False, f": {exc}"[:200]
+            if healthy:
+                comp["faulted"] = False
+                self._component_restarts[name] = 0
+                continue
+            if comp["faulted"]:
+                continue
+            faults.append({"fault": "component_crash", "layer": "execution",
+                           "evidence": f"component '{name}' is unhealthy{detail}",
+                           "component": name})
+        return faults
+
     # ------------------------------------------------------------------ scan
     def supervised_pid(self) -> int:
         """PID of the process this Overseer is accountable for.
@@ -402,12 +476,15 @@ class OverseerAgenticOS:
         return None
 
     def scan(self) -> dict[str, Any]:
+        integrity = self.check_state_integrity()
+        heartbeat_corrupt = any("heartbeat" in f for f in integrity)
         beat = self.beat()
         self.adopt_observed_pid(beat)
         faults: list[dict[str, Any]] = []
         if not beat:
-            faults.append({"fault": "no_heartbeat", "layer": "interface",
-                           "evidence": "heartbeat file missing or unreadable"})
+            if not heartbeat_corrupt:
+                faults.append({"fault": "no_heartbeat", "layer": "interface",
+                               "evidence": "heartbeat file missing or unreadable"})
         else:
             stall = self.stall_fault(beat)
             if stall:
@@ -442,18 +519,30 @@ class OverseerAgenticOS:
             faults.append({"fault": "permission_violation", "layer": "permission",
                            "evidence": finding})
 
+        for finding in self.check_daemon_health():
+            faults.append({"fault": "layer_failure", "layer": "execution",
+                           "evidence": finding})
+
+        for finding in integrity:
+            faults.append({"fault": "state_corrupt", "layer": "execution",
+                           "evidence": finding})
+
+        faults.extend(self.check_components())
+
         self.last_scan = {"ts": time.time(), "faults": faults,
                           "jarvis_alive": self.jarvis_alive()}
         for fault in faults:
-            self.handle_fault(fault["fault"], fault["layer"], fault["evidence"])
+            self.handle_fault(fault["fault"], fault["layer"], fault["evidence"],
+                              component=fault.get("component", ""))
         return self.last_scan
 
     # ----------------------------------------------------------- fault cycle
-    def handle_fault(self, fault: str, layer: str, evidence: str) -> Incident:
+    def handle_fault(self, fault: str, layer: str, evidence: str,
+                     component: str = "") -> Incident:
         self._counter += 1
         incident = Incident(
             incident_id=f"inc_{time.strftime('%Y%m%d-%H%M%S')}_{self._counter}",
-            fault=fault, layer=layer, evidence=evidence,
+            fault=fault, layer=layer, evidence=evidence, component=component,
         )
         self.incidents.append(incident)
         self.incidents = self.incidents[-50:]
@@ -461,6 +550,34 @@ class OverseerAgenticOS:
             self.audit.record("overseer", f"fault:{fault}", "detected",
                               {"layer": layer, "evidence": evidence[:400],
                                "incident": incident.incident_id}, actor="overseer")
+
+        # 0. COMPONENT crash: restart just the component under its own budget.
+        if fault == "component_crash" and component:
+            used = self._component_restarts.get(component, 0)
+            if used < self.max_component_restarts:
+                self._component_restarts[component] = used + 1
+                ok = self._restart_component(component)
+                incident.action_taken = (f"restarted component '{component}' "
+                                         f"({used + 1}/{self.max_component_restarts})")
+                incident.restarted = ok
+                incident.resolved = ok
+                if self.audit:
+                    self.audit.record("overseer", "resolved:component_crash",
+                                      "ok" if ok else "retry",
+                                      {"component": component, "attempt": used + 1,
+                                       "budget": self.max_component_restarts,
+                                       "incident": incident.incident_id},
+                                      actor="overseer")
+                return incident
+            comp = self._components.get(component)
+            if comp is not None:
+                comp["faulted"] = True
+            if self.audit:
+                self.audit.record("overseer", "component_crash", "escalated",
+                                  {"component": component,
+                                   "restarts_exhausted": self.max_component_restarts,
+                                   "incident": incident.incident_id},
+                                  actor="overseer")
 
         # 1. HALT - immediately, before any diagnosis.
         if self.halt_on_fault and fault in ("permission_violation", "runaway_loop",
@@ -494,7 +611,7 @@ class OverseerAgenticOS:
                 "overseer", f"resolved:{fault}", "ok",
                 {"layer": layer, "incident": incident.incident_id,
                  "halted": incident.halted, "repaired": incident.repaired,
-                 "restarted": incident.restarted,
+                 "restarted": incident.restarted, "component": component,
                  "root_cause": incident.diagnosis.get("root_cause", "")},
                 actor="overseer",
             )
@@ -506,6 +623,20 @@ class OverseerAgenticOS:
                 outcome="failure" if not incident.repaired else "success", weight=0.85,
             )
         return incident
+
+    def _restart_component(self, name: str) -> bool:
+        """Invoke a bound component's recovery action; never raises."""
+        comp = self._components.get(name)
+        if not comp or comp.get("restart") is None:
+            return False
+        try:
+            comp["restart"]()
+        except Exception as exc:  # noqa: BLE001 - a crashing restart is a failed restart
+            if self.audit:
+                self.audit.record("overseer", f"restart_component:{name}", "failed",
+                                  {"error": str(exc)[:300]}, actor="overseer")
+            return False
+        return True
 
     def halt_jarvis(self, reason: str = "overseer fault") -> bool:
         """Terminate the Jarvis process group immediately."""

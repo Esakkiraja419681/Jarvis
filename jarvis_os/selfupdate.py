@@ -31,6 +31,7 @@ MEMORY_GLOBS = (
     "data/memory.db", "data/memory.db-*", "data/vectors.json", "data/vectors.json.tmp",
     "data/lessons.jsonl", "data/actions.jsonl", "data/audit_ledger.jsonl",
     "data/audit.db*", "data/heartbeat.json", "*.key", "data/control.token",
+    "data/memory_index.db", "data/memory_index.db-*", "data/plan_state.json",
 )
 
 

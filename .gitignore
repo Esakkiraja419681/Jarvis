@@ -37,6 +37,9 @@ data/control/
 data/control.token
 data/heartbeat.json
 data/jarvis_daemon.log
+data/memory_index.db
+data/memory_index.db-*
+data/plan_state.json
 
 # Device sync secrets: local TLS material and the pairing token are generated
 # per install and must never reach git (like config.json above).

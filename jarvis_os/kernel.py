@@ -37,8 +37,10 @@ from .language import UniversalLanguageLayer
 from .language_layer import LanguageLayer
 from .llm import LLMClient, LLMUnavailable
 from .memory import PersistentMemory, local_embed
+from .memory_index import MemoryIndex
 from .overseer import OverseerAgenticOS
 from .permissions import PermissionGate
+from .planner import GoalPlanner
 from .sandbox import PythonSandbox, ShellSandbox
 from .selfupdate import SelfUpdate
 from .software_factory import SoftwareFactory
@@ -133,6 +135,17 @@ class JarvisKernel:
         self.llm = LLMClient(cfg, gate=self.gate, audit=self.audit)
         self.memory.set_embedder(self._embed)
 
+        # --- local vector index --------------------------------------------
+        self.memory_index = MemoryIndex(
+            cfg.resolve(cfg.get("memory_index.sqlite_path", "data/memory_index.db")),
+            top_k=int(cfg.get("memory_index.top_k", 5)),
+        ).open()
+        self.memory_index.set_embedder(self._embed)
+        if cfg.get("memory_index.sync_on_boot", True):
+            synced = self.memory_index.sync_from(self.memory)
+            self.audit.record("memory_index", "sync", "ok",
+                              {"synced": synced, "rows": self.memory_index.count()})
+
         # --- language layer -------------------------------------------------
         # Needs self.llm: without it the Ollama translation fallback can never
         # activate and en->ta silently loses its last-resort backend.
@@ -156,6 +169,10 @@ class JarvisKernel:
                                         cfg, self.audit, self.tools)
         self.team = self.agents.default_team(self.tools, self.memory, self.llm,
                                             self.task_manager, cfg, self.audit)
+
+        # --- goal planner ----------------------------------------------------
+        self.planner = GoalPlanner(cfg, llm=self.llm, gate=self.gate,
+                                   audit=self.audit, memory=self.memory)
 
         # --- self-modification ---------------------------------------------
         self.self_update = SelfUpdate(cfg, gate=self.gate, audit=self.audit,
@@ -187,6 +204,19 @@ class JarvisKernel:
         self.overseer = OverseerAgenticOS(cfg, audit=self.audit, memory=self.memory,
                                           llm=self.llm, gate=self.gate, root=cfg.root)
         self.overseer.bind_restart(self._overseer_restart)
+        self.overseer.bind_component(
+            "daemon",
+            health=lambda: (not cfg.feature("background_daemon"))
+            or self.daemon.alive(),
+            restart=self._component_restart_daemon,
+        )
+        self.overseer.bind_component(
+            "control_bridge",
+            health=lambda: (not (cfg.feature("control_bridge", True)
+                                 and cfg.feature("rest_api", True)))
+            or self.control._server is not None,
+            restart=self._component_restart_control_bridge,
+        )
         # Beat before the Overseer's scan thread exists. start() launches that
         # thread, and its first scan() runs immediately - so a process whose
         # heartbeat file did not exist yet found no beat and opened a
@@ -625,6 +655,21 @@ class JarvisKernel:
         self.audit.record("memory", "learn", "ok", {"id": lesson.id})
         return lesson
 
+    def remember_fact(self, text: str, kind: str = "fact",
+                      importance: float = 0.5) -> dict[str, Any]:
+        """Store one fact in append-only memory and mirror it into the index."""
+        text = str(text or "").strip()
+        if not text:
+            return {"ok": False, "error": "nothing to remember"}
+        record = self.memory.remember(text, kind=kind, importance=importance)
+        row_id = self.memory_index.add(text, kind=kind, created_at=record.created_at)
+        self.audit.record("memory", "remember_fact", "ok",
+                          {"id": record.id, "kind": kind,
+                           "indexed": row_id is not None})
+        return {"ok": True, "id": record.id, "kind": kind,
+                "indexed": row_id is not None,
+                "rows": self.memory_index.count()}
+
     # -------------------------------------------------------------- software
     def build(self, spec: str) -> str:
         result = self.software.build(spec)
@@ -695,6 +740,18 @@ class JarvisKernel:
         if self.gate and not self.gate.armed:
             self.gate.arm()
         self._apply_overseer_control(include_gate=False)
+
+    def _component_restart_daemon(self) -> bool:
+        if self.daemon.alive():
+            return True
+        self.daemon.start()
+        return self.daemon.alive()
+
+    def _component_restart_control_bridge(self) -> bool:
+        if self.control._server is not None:
+            return True
+        self.control.start_rest()
+        return self.control._server is not None
 
     # ------------------------------------------------------------------ voice
     def set_voice(self, state: str) -> str:
@@ -780,6 +837,12 @@ class JarvisKernel:
         self.audit.record("kernel", "shutdown", "ok",
                           {"cycles": self.cycles,
                            "memory": self.memory.status()})
+        memory_index = getattr(self, "memory_index", None)
+        if memory_index is not None:
+            try:
+                memory_index.close()
+            except Exception:  # noqa: BLE001
+                pass
         self.memory.close()
         self.audit.close()
 
