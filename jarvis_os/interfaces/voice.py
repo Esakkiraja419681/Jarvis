@@ -43,6 +43,7 @@ class VoiceCommandInterface:
         self._recognizer: Any = None
         self._tts: Any = None
         self._lock = threading.RLock()
+        self._speaking_listeners: list[Callable[[bool], None]] = []
         self.last_transcript = ""
         self.history: list[str] = []
         self.said_count = 0
@@ -121,6 +122,29 @@ class VoiceCommandInterface:
         self.history = self.history[-200:]
         return rendered
 
+    # --------------------------------------------------------- speaking hook
+    def add_speaking_listener(self, listener: Callable[[bool], None]) -> None:
+        """Register ``listener(True/False)`` fired around every TTS playback.
+
+        The VoiceDaemon uses this to drop microphone audio while Jarvis is
+        talking, so the recogniser can never hear its own voice.
+        """
+        with self._lock:
+            if listener not in self._speaking_listeners:
+                self._speaking_listeners.append(listener)
+
+    def remove_speaking_listener(self, listener: Callable[[bool], None]) -> None:
+        with self._lock:
+            if listener in self._speaking_listeners:
+                self._speaking_listeners.remove(listener)
+
+    def _notify_speaking(self, speaking: bool) -> None:
+        for listener in list(self._speaking_listeners):
+            try:
+                listener(speaking)
+            except Exception:  # noqa: BLE001 - a bad hook must not mute TTS
+                pass
+
     def say(self, text: str, translate: bool = True) -> bool:
         rendered = (self.kernel.language.process_outbound(text) if translate
                     else self.kernel.language.prefix(text))
@@ -132,12 +156,15 @@ class VoiceCommandInterface:
         except VoiceUnavailable:
             return False
         with self._lock:
+            self._notify_speaking(True)
             try:
                 engine.say(rendered)
                 engine.runAndWait()
                 return True
             except Exception:  # noqa: BLE001 - a stuck speaker must not hang the OS
                 return False
+            finally:
+                self._notify_speaking(False)
 
     # ---------------------------------------------------------------- listen
     def listen(self, timeout: float | None = None, phrase_limit: float | None = None) -> str:

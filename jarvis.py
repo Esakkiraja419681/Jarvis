@@ -49,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cycles", type=int, default=0, help="stop after N cycles (0 = forever)")
     parser.add_argument("--no-overseer", action="store_true", help="disable the watchdog")
     parser.add_argument("--no-voice", action="store_true", help="force voice off")
+    parser.add_argument("--voice", action="store_true",
+                        help="start the background voice daemon for this session only")
     parser.add_argument("--honorific", default=None, help="override the honorific")
     args = parser.parse_args(argv)
 
@@ -62,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
         config.set_feature("overseer", False, persist=False)
     if args.no_voice:
         config.set_feature("voice", False, persist=False)
+    if args.voice:
+        # Session-scoped voice enable: the kernel sees the feature on at boot
+        # and starts jarvis-voice, but config.json stays byte-identical.
+        config.set_feature("voice", True, persist=False)
     if args.daemon:
         config.set_feature("background_daemon", True, persist=False)
     if args.cycles:

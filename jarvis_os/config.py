@@ -49,6 +49,7 @@ _DEFAULTS: dict[str, Any] = {
             "software_control",
             "voice_capture",
             "background_daemon",
+            "ui_control",
         ],
         "auto_allowed": ["file_read", "dir_list", "memory_read", "status"],
         "approval_words": ["yes", "allow", "approve", "approved", "proceed", "ok", "haan"],
@@ -122,6 +123,7 @@ _DEFAULTS: dict[str, Any] = {
         "wake_words": ["jarvis", "sir"],
         "tts_rate": 175,
         "listen_timeout_seconds": 8,
+        "vosk_model_path": "models/vosk-model-small-en-us-0.15",
     },
     "software_factory": {
         "build_root": "data/built",

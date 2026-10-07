@@ -271,6 +271,31 @@ class ToolRegistry:
                           "importance": {"type": "number"}}, "required": ["content"]},
                       permission_category="self_learn", dangerous=True, builtin=True)
 
+        # pyautogui is imported inside ui.run(), so registering the tool
+        # never requires the package to be present.
+        from .ui import run as _ui_run
+
+        self.register(
+            "ui_control", _ui_run,
+            "Control the OS UI with pyautogui: click, type, hotkey, press, "
+            "scroll, screenshot (pyautogui FailSafe stays on).",
+            {"type": "object", "properties": {
+                "action": {"type": "string",
+                           "description": "position | move | click | doubleclick | "
+                                          "rightclick | type | hotkey | press | "
+                                          "scroll | screenshot"},
+                "x": {"type": "number"}, "y": {"type": "number"},
+                "text": {"type": "string"},
+                "keys": {"type": "array", "items": {"type": "string"}},
+                "key": {"type": "string"},
+                "button": {"type": "string"},
+                "clicks": {"type": "integer"},
+                "amount": {"type": "integer"},
+                "duration": {"type": "number"},
+                "interval": {"type": "number"}},
+             "required": ["action"]},
+            permission_category="ui_control", dangerous=True, builtin=True)
+
     # -------------------------------------------------------- path safety
     def _resolve(self, raw: str) -> Path:
         candidate = Path(str(raw)).expanduser()

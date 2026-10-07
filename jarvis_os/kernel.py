@@ -42,6 +42,7 @@ from .selfupdate import SelfUpdate
 from .software_factory import SoftwareFactory
 from .taskmanager import TaskManager
 from .tools import ToolRegistry
+from .voice import VoiceDaemon
 
 
 class JarvisKernel:
@@ -185,6 +186,17 @@ class JarvisKernel:
         self._write_heartbeat()
         if cfg.feature("overseer", True):
             self.overseer.start()
+
+        # --- background voice daemon ---------------------------------------
+        # Constructed side-effect free: with the voice feature off (selftest,
+        # text-only runs) no microphone is ever opened. --voice turns the
+        # feature on for this session only, and start() degrades to a spoken
+        # hint when vosk/sounddevice/the model are absent.
+        self.voice_daemon = VoiceDaemon(self)
+        if cfg.feature("voice", False):
+            ok, message = self.voice_daemon.start()
+            print(f"[voice] {message if ok else 'daemon offline: ' + message}",
+                  flush=True)
 
         self._install_signal_handlers()
 
@@ -680,10 +692,14 @@ class JarvisKernel:
             ok, message = self.voice_iface.enable()
             # _voice_active is a callable consulted on every approval prompt.
             self.gate._voice_active = lambda: self.voice_iface.voice_active
+            if ok:
+                _daemon_ok, daemon_message = self.voice_daemon.start()
+                message = f"{message} {daemon_message}"
             return message
         if state in ("off", "0", "false", "no", "disable"):
+            self.voice_daemon.stop()
             return self.voice_iface.disable()
-        return self.voice_iface.status()
+        return f"{self.voice_iface.status()} | {self.voice_daemon.status()}"
 
     # ---------------------------------------------------------------- status
     def features_report(self) -> str:
@@ -727,6 +743,14 @@ class JarvisKernel:
         # Stop beating first: once the Overseer stops, a late beat from the
         # refresher would race against a half-closed watchdog.
         self.stop_heartbeat_refresher()
+        # Release the microphone before anything else tears down, so a later
+        # boot (or another process) can open it immediately.
+        voice_daemon = getattr(self, "voice_daemon", None)
+        if voice_daemon is not None:
+            try:
+                voice_daemon.stop()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             self.control.shutdown_all()
         except Exception:  # noqa: BLE001

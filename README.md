@@ -22,7 +22,7 @@ python jarvis.py
 # bounded loop for a smoke test
 python jarvis.py --loop --cycles 2
 
-# full self-test suite (130 checks)
+# full self-test suite (229 checks)
 python selftest.py
 ```
 
@@ -48,6 +48,7 @@ Jarvis says so and every other subsystem keeps working.
 | `python jarvis.py --daemon` | Run in the background, recallable via `background attach` |
 | `python jarvis.py --overseer` | Run **only** the watchdog process |
 | `python jarvis.py --no-voice` | Force the text interface |
+| `python jarvis.py --voice` | Start the background voice daemon for this session (never written to config.json) |
 | `python jarvis.py --honorific "Madam"` | Change the form of address |
 
 To get a genuinely independent second Overseer process, start it separately:
@@ -55,6 +56,40 @@ To get a genuinely independent second Overseer process, start it separately:
 ```powershell
 python jarvis.py --overseer
 ```
+
+---
+
+## Background voice daemon (Windows)
+
+`jarvis_os/voice.py` runs a `jarvis-voice` thread: a non-blocking `sounddevice`
+microphone stream feeding an offline Vosk recogniser. Say **"Jarvis"** to wake
+it - a bare "Jarvis" answers "Yes, Sir?" and arms an 8 second window, while
+"Jarvis, status" runs immediately. Stray speech without the wake word is
+ignored, microphone audio is dropped while pyttsx3 speaks (no echo), and
+recognised text goes through the language layer before a REPL verb dispatch or
+a TaskManager goal. Everything stays local.
+
+Setup, on Windows, from the repo root (first run installs `pyautogui`, `vosk`,
+`sounddevice`, `pyttsx3` and downloads the ~40 MB Vosk English model into
+`models\` - Jarvis itself never downloads anything):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action install
+powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action register   # start at logon
+powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action start      # start now
+powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action status     # task, pid, heartbeat, deps
+powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action stop       # graceful (data\STOP), then force
+powershell -ExecutionPolicy Bypass -File .\setup-windows-daemon.ps1 -Action unregister
+```
+
+The scheduled task runs `pythonw jarvis.py --daemon --voice` in the logged-on
+session only, so the pyautogui tool always has a real desktop. In the REPL,
+`voice on` / `voice off` start and stop the daemon for the session too.
+
+The `ui_control` tool (click, type, hotkey, press, scroll, screenshot) is
+backed by pyautogui, is gated behind manual permission like any system
+modification, and keeps pyautogui's FailSafe (throw the mouse to the top-left
+corner to abort) enabled.
 
 ---
 

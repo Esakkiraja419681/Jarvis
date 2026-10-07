@@ -19,6 +19,19 @@ argostranslate>=1.9    # OFFLINE translation. Requires language pairs to be
 speech_recognition>=3.10   # offline speech-to-text (Sphinx/Whisper backend)
 pyttsx3>=2.90              # offline text-to-speech output
 
+# --- Background voice daemon (optional) -----------------------------------
+# Enables `python jarvis.py --voice` and setup-windows-daemon.ps1:
+# a non-blocking mic stream feeding an offline Vosk wake-word recogniser.
+# The Vosk model itself is NOT a pip package - the setup script downloads
+# it into models/ (Jarvis never downloads models at runtime).
+vosk>=0.3.45
+sounddevice>=0.4.6
+
+# --- OS UI control (optional) ---------------------------------------------
+# Powers the gated `ui_control` tool (click/type/hotkey/scroll/screenshot).
+# Imported lazily inside jarvis_os/ui.py, so the core boots without it.
+pyautogui>=0.9.54
+
 # --- Local translation fallback (optional, heavy) ------------------------
 # Only needed if you want the neural offline translator instead of Argos.
 # It is what serves Tamil: NLLB-200 covers `ta` natively, while Argos has no
@@ -33,4 +46,5 @@ torch>=2.0
 # systems, but it needs PortAudio binaries, so it is not listed here. Install it
 # only if you enable voice:
 #     pip install pyaudio
+# (sounddevice, used by the background daemon, ships its own PortAudio.)
 # Voice degrades gracefully to text when any of these are absent.
