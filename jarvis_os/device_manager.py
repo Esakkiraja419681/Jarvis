@@ -846,6 +846,12 @@ class DeviceSyncManager:
             from websockets.sync.client import connect
         except Exception as exc:  # noqa: BLE001 - optional dependency
             return {"ok": False, "error": f"websockets is not installed ({exc})"}
+        try:
+            from websockets.exceptions import ConnectionClosed, InvalidMessage
+            ws_open_errors: tuple[type[BaseException], ...] = (
+                ConnectionClosed, InvalidMessage)
+        except Exception:  # noqa: BLE001 - very old websockets builds
+            ws_open_errors = ()
         host, port = target["host"], int(target["port"])
         try:
             context = self._peer_ssl(host, port, budget)
@@ -853,9 +859,12 @@ class DeviceSyncManager:
             return {"ok": False, "error": f"peer certificate rejected: {exc}"}
         except (OSError, ssl.SSLError) as exc:
             return {"ok": False, "error": f"cannot reach {host}:{port}: {exc}"}
+        conn = self._open_ws(connect, host, port, context, budget,
+                             ws_open_errors)
+        if isinstance(conn, dict):
+            return conn
         try:
-            with connect(f"wss://{host}:{port}", ssl=context,
-                         open_timeout=budget) as conn:
+            with conn:
                 if not self._send_json(conn, {"type": "auth", "token": self._token or ""}):
                     return {"ok": False, "error": "connection closed during the handshake."}
                 reply = self._recv_reply(conn, budget)
@@ -885,6 +894,25 @@ class DeviceSyncManager:
             return {"ok": False, "error": f"cannot complete TLS call to {host}:{port}: {exc}"}
         except Exception as exc:  # noqa: BLE001 - a protocol surprise is not a crash
             return {"ok": False, "error": f"sync call failed: {type(exc).__name__}: {exc}"}
+
+    @staticmethod
+    def _open_ws(connect: Any, host: str, port: int, context: ssl.SSLContext,
+                 budget: float,
+                 ws_errors: tuple[type[BaseException], ...]) -> Any:
+        """Open a peer socket, retrying transient opening-handshake failures."""
+        url = f"wss://{host}:{port}"
+        last: BaseException | None = None
+        for attempt in range(3):
+            try:
+                return connect(url, ssl=context, open_timeout=budget)
+            except ssl.SSLCertVerificationError as exc:
+                return {"ok": False, "error": f"peer certificate rejected: {exc}"}
+            except (OSError, ssl.SSLError, *ws_errors) as exc:
+                last = exc
+                if attempt < 2:
+                    time.sleep(0.05 * (attempt + 1))
+        return {"ok": False,
+                "error": f"cannot complete TLS call to {host}:{port}: {last}"}
 
     @staticmethod
     def _error_of(frame: dict[str, Any], fallback: str) -> str:
