@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "saved_at": 1791351262.702205,
+  "saved_at": 1791351831.421047,
   "programs": [
     {
       "id": "sw_8fcc67bd",
@@ -734,10 +734,10 @@
       "language": "python",
       "entry": "main.py",
       "path": "C:\\Users\\esakk\\jarvis-os\\data\\built\\sw_e1480a34",
-      "status": "installed",
+      "status": "stopped",
       "built_at": 1791351224.8346946,
       "installed": true,
-      "launched_at": null,
+      "launched_at": 1791351760.3150373,
       "pid": null,
       "notes": "Generated locally as a template; ask for a richer build.",
       "test": {
@@ -749,7 +749,9 @@
         "timed_out": false
       },
       "history": [
-        "installed at 1791351263"
+        "installed at 1791351263",
+        "launched pid=27868",
+        "stop at 1791351831"
       ]
     }
   ]
