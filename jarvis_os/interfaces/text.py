@@ -161,6 +161,9 @@ class TextCommandInterface:
             ("device [list|add|remove]", "DeviceManager"),
             ("background [start|stop|status]", "BackgroundDaemon"),
             ("config [key[=value]]", "read or change configuration"),
+            ("dashboard", "render the live OS dashboard"),
+            ("business [status|content|lead|funnel]", "multi-channel pipeline + CRM"),
+            ("trading [status|profile|market|radar|execute|orders|pnl]", "gated analysis"),
             ("features", "toggle features and evolution phases"),
             ("audit [n]", "recent audit-ledger entries"),
             ("quit / exit", "leave the REPL"),
@@ -204,6 +207,173 @@ class TextCommandInterface:
 
     def cmd_status(self, args: list[str]) -> None:
         self.plain(self.kernel.status_report())
+
+    def cmd_dashboard(self, args: list[str]) -> None:
+        from jarvis_os.dashboard import Dashboard
+        self.plain(Dashboard(self.kernel).render())
+
+    def cmd_business(self, args: list[str]) -> None:
+        agent = self.kernel.business
+        sub = args[0].lower() if args else "status"
+        if sub in ("status", "state"):
+            self.plain(agent.status())
+            self.plain(agent.funnel_report())
+        elif sub == "content":
+            self.business_content(agent, args[1:])
+        elif sub in ("lead", "leads"):
+            self.business_leads(agent, args[1:])
+        elif sub in ("funnel", "report"):
+            self.plain(agent.funnel_report())
+        else:
+            self.say("Usage: business [status|content <sub>|lead <sub>|funnel]")
+
+    def business_content(self, agent: Any, args: list[str]) -> None:
+        mode = args[0].lower() if args else "list"
+        if mode == "draft":
+            if len(args) < 3:
+                self.say("Usage: business content draft <blog|email|social> <topic>")
+                return
+            channel, topic = args[1].lower(), " ".join(args[2:])
+            record = agent.content_draft(channel, topic)
+            self.plain(self._content_line(record))
+        elif mode == "review":
+            if len(args) != 3:
+                self.say("Usage: business content review <id> <approved|rejected>")
+                return
+            result = agent.content_review(args[1], args[2])
+            self.say(result.get("error") or f"{args[1]} -> {args[2]}")
+        elif mode == "publish":
+            if len(args) != 2:
+                self.say("Usage: business content publish <id>")
+                return
+            result = agent.content_publish(args[1])
+            self.say(result.get("error") or f"{args[1]} published.")
+        elif mode == "show":
+            if len(args) != 2:
+                self.say("Usage: business content show <id>")
+                return
+            record = agent.content_status(args[1])
+            self.plain(self._content_line(record) if record else f"no content {args[1]}")
+        elif mode == "list":
+            stage = args[1].lower() if len(args) > 1 else ""
+            channel = args[2].lower() if len(args) > 2 else ""
+            records = agent.content_list(stage, channel)
+            for record in records:
+                self.plain(self._content_line(record))
+            if not records:
+                self.plain("no content records")
+        else:
+            self.say("Usage: business content draft|review|publish|show|list")
+
+    def business_leads(self, agent: Any, args: list[str]) -> None:
+        mode = args[0].lower() if args else "list"
+        if mode == "add":
+            if len(args) < 2:
+                self.say("Usage: business lead add <name> [company] [email]")
+                return
+            record = agent.lead_add(args[1], args[2] if len(args) > 2 else "",
+                                    args[3] if len(args) > 3 else "")
+            self.plain(self._lead_line(record))
+        elif mode == "touch":
+            if len(args) < 3:
+                self.say("Usage: business lead touch <id> <method> [note...]")
+                return
+            result = agent.lead_add_touch(args[1], args[2], " ".join(args[3:]))
+            self.say(result.get("error") or f"touch recorded on {args[1]}")
+        elif mode == "stage":
+            if len(args) != 3:
+                self.say("Usage: business lead stage <id> <new|contacted|qualified|"
+                         "proposal|won|lost>")
+                return
+            result = agent.lead_move_stage(args[1], args[2])
+            self.say(result.get("error") or f"{args[1]} -> {args[2]}")
+        elif mode == "score":
+            if len(args) != 3:
+                self.say("Usage: business lead score <id> <0-100>")
+                return
+            result = agent.lead_set_score(args[1], args[2])
+            self.say(result.get("error") or f"{args[1]} scored {result.get('score')}")
+        elif mode == "list":
+            stage = args[1].lower() if len(args) > 1 else ""
+            for record in agent.leads(stage):
+                self.plain(self._lead_line(record))
+            if not agent.leads(stage):
+                self.plain("no leads")
+        else:
+            self.say("Usage: business lead add|touch|stage|score|list")
+
+    @staticmethod
+    def _content_line(record: dict[str, Any]) -> str:
+        return (f"[{record['kind']}:{record['stage']:<9}] {record['id'][-8:]} "
+                f"{record.get('channel', '?')} | {record.get('topic', '?')}")
+
+    @staticmethod
+    def _lead_line(record: dict[str, Any]) -> str:
+        touches = len(record.get("touches", []))
+        return (f"[lead:{record.get('stage', '?'):<9}] {record.get('name', '?')}"
+                f" @{record.get('company', '-')} score={record.get('score', 0)} "
+                f"touches={touches} {record.get('id', '')[-8:]}")
+
+    def cmd_trading(self, args: list[str]) -> None:
+        bridge = self.kernel.trading
+        sub = args[0].lower() if args else "status"
+        if sub in ("status", "state"):
+            self.plain(bridge.status())
+        elif sub == "profile":
+            profile = bridge.risk_profile()
+            self.plain(f"profile: {profile['name']} | {profile['rules']['title']}")
+        elif sub in ("market", "analyze"):
+            symbol = args[1].upper() if len(args) > 1 else ""
+            rows = [bridge.analyze(symbol)] if symbol else bridge.market()
+            for row in rows:
+                self.plain(self._market_line(row))
+        elif sub in ("radar", "whales"):
+            found = bridge.scan_whales()
+            for alert in found:
+                self.plain(f"[whale] {alert['symbol']} {alert['side']} "
+                           f"${alert['usd']:,.0f} {alert['note']}")
+            self.plain(f"new alerts: {len(found)}")
+        elif sub == "alert" or sub == "resolve":
+            if len(args) != 3:
+                self.say("Usage: trading alert resolve <id> <ignore|escalate>")
+                return
+            result = bridge.resolve_alert(args[1], args[2])
+            self.say(result.get("error") or f"alert {args[1]} -> {args[2]}")
+        elif sub == "execute":
+            if len(args) not in (3, 4) or args[2].lower() not in ("buy", "sell"):
+                self.say("Usage: trading execute <symbol> <buy|sell> <qty> [--live]")
+                return
+            live = len(args) == 4 and args[3] == "--live"
+            order = bridge.execute(args[1].upper(), args[2].lower(),
+                                   float(args[3]), live=live)
+            mode = order.get("mode", "?")
+            self.say(f"{mode}: {order.get('symbol')} {order.get('side')} "
+                     f"{order.get('qty')} @ {order.get('price')}")
+        elif sub in ("orders", "ledger"):
+            limit = int(args[1]) if len(args) > 1 else 10
+            for order in bridge.ledger()[-limit:]:
+                self.plain(f"[{order['kind']}] {order['id'][-8:]} "
+                           f"{order.get('symbol', '?')} {order.get('side', '?')} "
+                           f"{order.get('qty', '?')} @ {order.get('price', '?')} "
+                           f"result={order.get('result', '?')}")
+        elif sub == "pnl":
+            report = bridge.pnl()
+            for row in report["positions"]:
+                self.plain(f"{row['symbol']} qty={row['qty']} avg={row['avg_price']} "
+                           f"mark={row['mark']} unrealized=${row['unrealized']:,.2f}")
+            self.plain(f"total unrealized: ${report['unrealized']:,.2f}")
+        else:
+            self.say("Usage: trading [status|profile|market [sym]|radar|alert resolve "
+                     "|execute <sym> <side> <qty> [--live]|orders|pnl]")
+
+    @staticmethod
+    def _market_line(row: dict[str, Any]) -> str:
+        if row.get("error"):
+            return row["error"]
+        return (f"{row['symbol']:<4} {row['class']:<10} price={row['price']:,.2f} "
+                f"sma20={row['sma20']:,.2f} sma50={row['sma50']:,.2f} "
+                f"rsi={row['rsi']:,.2f} vol={row['volatility']:,.3f} "
+                f"signal={row['signal']}")
 
     def cmd_memory(self, args: list[str]) -> None:
         if args:
@@ -375,6 +545,9 @@ TextCommandInterface.COMMANDS = {
     "run": TextCommandInterface.cmd_run, "do": TextCommandInterface.cmd_run,
     "plan": TextCommandInterface.cmd_plan,
     "status": TextCommandInterface.cmd_status, "stat": TextCommandInterface.cmd_status,
+    "dashboard": TextCommandInterface.cmd_dashboard, "dash": TextCommandInterface.cmd_dashboard,
+    "business": TextCommandInterface.cmd_business, "biz": TextCommandInterface.cmd_business,
+    "trading": TextCommandInterface.cmd_trading, "trade": TextCommandInterface.cmd_trading,
     "memory": TextCommandInterface.cmd_memory, "mem": TextCommandInterface.cmd_memory,
     "tools": TextCommandInterface.cmd_tools,
     "evolve": TextCommandInterface.cmd_evolve,

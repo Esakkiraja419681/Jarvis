@@ -41,6 +41,14 @@ data/memory_index.db
 data/memory_index.db-*
 data/plan_state.json
 
+# Phase 5 state: content pipeline, CRM and trading ledgers/alerts. Excluded by
+# MEMORY_GLOBS in jarvis_os/selfupdate.py, so a snapshot never re-commits them.
+data/business_ledger.jsonl
+data/content_pipeline.jsonl
+data/crm_contacts.jsonl
+data/trading_alerts.jsonl
+data/trading_ledger.jsonl
+
 # Device sync secrets: local TLS material and the pairing token are generated
 # per install and must never reach git (like config.json above).
 data/pairing.token

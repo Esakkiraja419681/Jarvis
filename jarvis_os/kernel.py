@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 from .agents import Agent, AgentRegistry
 from .audit import AuditLedger
+from .business_agent import BusinessAgent
 from .config import Config
 from .control_bridge import ControlBridge
 from .daemon import BackgroundDaemon
@@ -46,6 +47,7 @@ from .selfupdate import SelfUpdate
 from .software_factory import SoftwareFactory
 from .taskmanager import TaskManager
 from .tools import ToolRegistry
+from .trading_bridge import TradingBridge
 from .voice import VoiceDaemon
 
 
@@ -173,6 +175,13 @@ class JarvisKernel:
         # --- goal planner ----------------------------------------------------
         self.planner = GoalPlanner(cfg, llm=self.llm, gate=self.gate,
                                    audit=self.audit, memory=self.memory)
+
+        # --- business & trading ----------------------------------------------
+        # Offline pipeline automation and gated analysis. Both are constructed
+        # from the live gate, so a content publish or a simulated market order
+        # still asks Sir; state lives under data/ and is never committed.
+        self.business = BusinessAgent(self, cfg)
+        self.trading = TradingBridge(self, cfg)
 
         # --- self-modification ---------------------------------------------
         self.self_update = SelfUpdate(cfg, gate=self.gate, audit=self.audit,
@@ -800,6 +809,8 @@ class JarvisKernel:
             f"[sync]      {self.device_sync.report()}",
             f"[daemon]    {self.daemon.status()}",
             f"[evolve]    {self.evolve_engine.phases_report().splitlines()[0] if self.evolve_engine.cycles else 'no cycle yet'}",
+            f"[business]  {self.business.status()}",
+            f"[trading]   {self.trading.status()}",
             "",
             self.task_manager.status(),
             "",

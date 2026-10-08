@@ -5,6 +5,7 @@
     python jarvis.py --loop          # headless infinite loop only
     python jarvis.py --daemon        # detached background mode
     python jarvis.py --overseer      # run the Overseer watchdog on its own
+    python jarvis.py --voice-mode    # hands-free Jarvis Mode (voice loop)
     python jarvis.py --goal "..."    # run one goal, then exit
     python jarvis.py --plan "..."    # decompose a goal into a step DAG, print, exit
     python jarvis.py --remember "..."  # store a fact in memory + local index, exit
@@ -17,6 +18,7 @@
     python jarvis.py --control gui ocr        # desktop OCR via the control bridge
     python jarvis.py --stop <id>              # stop a running program, then exit
     python jarvis.py --tools                  # list the tool registry, then exit
+    python jarvis.py --dashboard              # render the OS dashboard, then exit
 
     python jarvis.py --device serve           # serve device sync, then exit
     python jarvis.py --sync [id ...]          # sync one device / all devices, then exit
@@ -69,6 +71,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-voice", action="store_true", help="force voice off")
     parser.add_argument("--voice", action="store_true",
                         help="start the background voice daemon for this session only")
+    parser.add_argument("--voice-mode", action="store_true",
+                        help="hands-free Jarvis Mode: wake-word REPL loop")
     parser.add_argument("--honorific", default=None, help="override the honorific")
     # --- one-shot software / control actions (session-scoped, exit after) ---
     parser.add_argument("--build", default="", metavar="SPEC",
@@ -106,6 +110,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--remember", default="", metavar="TEXT",
                         help="store a fact in memory and the local vector "
                              "index, then exit")
+    parser.add_argument("--dashboard", action="store_true",
+                        help="render the live OS dashboard, then exit")
     return parser
 
 
@@ -129,6 +135,10 @@ def _report(kernel: JarvisKernel, result: object) -> int:
 
 def _run_action(kernel: JarvisKernel, args: argparse.Namespace) -> int:
     """Dispatch one one-shot action flag. The kernel is already booted."""
+    if args.dashboard:
+        from jarvis_os.dashboard import Dashboard
+        kernel.text_iface.plain(Dashboard(kernel).render())
+        return 0
     if args.tools:
         kernel.text_iface.plain(kernel.tools.describe())
         return 0
@@ -197,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         config.set_feature("overseer", False, persist=False)
     if args.no_voice:
         config.set_feature("voice", False, persist=False)
-    if args.voice:
+    if args.voice or args.voice_mode:
         # Session-scoped voice enable: the kernel sees the feature on at boot
         # and starts jarvis-voice, but config.json stays byte-identical.
         config.set_feature("voice", True, persist=False)
@@ -211,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     # predicate is computed exactly once instead of drifting between them.
     one_shot = bool(
         args.tools or args.build or args.install or args.launch
-        or args.control or args.stop
+        or args.control or args.stop or args.dashboard
         or args.device is not None or args.sync is not None
         or args.translate is not None
         or args.plan or args.remember)
@@ -245,7 +255,12 @@ def main(argv: list[str] | None = None) -> int:
         kernel.shutdown()
         return 0
 
-    if args.loop or args.daemon:
+    if args.loop or args.daemon or args.voice_mode:
+        if args.voice_mode:
+            kernel.text_iface.say(
+                "Jarvis Mode is live, Sir. Say 'Jarvis' to wake me, then give a "
+                "command - for example 'status', 'dashboard', 'business' or "
+                "'trading'.")
         if args.daemon:
             kernel.text_iface.plain(
                 f"Jarvis OS running in the background (pid {__import__('os').getpid()}).")

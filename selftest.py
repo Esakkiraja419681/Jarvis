@@ -61,6 +61,11 @@ _LIVE_STATE_FILES = (
     "data/audit_ledger.jsonl",
     "data/memory_index.db",
     "data/plan_state.json",
+    "data/content_pipeline.jsonl",
+    "data/crm_contacts.jsonl",
+    "data/business_ledger.jsonl",
+    "data/trading_ledger.jsonl",
+    "data/trading_alerts.jsonl",
 )
 
 _DATA_PATHS = (
@@ -86,6 +91,11 @@ _DATA_PATHS = (
     "device_manager.pairing_token_path",
     "memory_index.sqlite_path",
     "planner.state_path",
+    "business.pipeline_path",
+    "business.crm_path",
+    "business.ledger_path",
+    "trading.ledger_path",
+    "trading.alerts_path",
 )
 
 

@@ -50,6 +50,8 @@ _DEFAULTS: dict[str, Any] = {
             "voice_capture",
             "background_daemon",
             "ui_control",
+            "business_publish",
+            "trading_exec",
         ],
         "auto_allowed": ["file_read", "dir_list", "memory_read", "status"],
         "approval_words": ["yes", "allow", "approve", "approved", "proceed", "ok", "haan"],
@@ -191,6 +193,23 @@ _DEFAULTS: dict[str, Any] = {
         "ledger_path": "data/audit_ledger.jsonl",
         "sqlite_path": "data/audit.db",
         "shared_with_overseer": True,
+    },
+    "business": {
+        "pipeline_path": "data/content_pipeline.jsonl",
+        "crm_path": "data/crm_contacts.jsonl",
+        "ledger_path": "data/business_ledger.jsonl",
+    },
+    "trading": {
+        "ledger_path": "data/trading_ledger.jsonl",
+        "alerts_path": "data/trading_alerts.jsonl",
+        "risk_profile": "monk",
+        "dry_run": True,
+        "whale_threshold_usd": 1000000,
+        "reference_capital_usd": 100000,
+    },
+    "dashboard": {
+        "refresh_seconds": 5,
+        "show_secrets": False,
     },
 }
 

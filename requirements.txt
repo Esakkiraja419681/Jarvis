@@ -54,6 +54,12 @@ transformers>=4.40
 sentencepiece>=0.1.99    # NLLB tokenizer
 torch>=2.0
 
+# --- Terminal dashboard (optional) ----------------------------------------
+# Powers `python jarvis.py --dashboard` and the `dashboard` REPL command: a
+# Rich Panel over the plain-text renderer. Imported lazily, so the core and
+# the dashboard's plain-text fallback work without it.
+rich>=13
+
 # NOTE: PyAudio is required by SpeechRecognition for microphone capture on most
 # systems, but it needs PortAudio binaries, so it is not listed here. Install it
 # only if you enable voice:

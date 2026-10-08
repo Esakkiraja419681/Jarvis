@@ -38,6 +38,8 @@ MANDATORY_APPROVAL = frozenset({
     "skill_add",
     "external_ai",
     "cross_device",
+    "business_publish",
+    "trading_exec",
 })
 
 DECISION_ALLOW = "approved"
