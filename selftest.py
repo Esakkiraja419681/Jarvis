@@ -5,7 +5,6 @@ Run:  python selftest.py
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
@@ -155,28 +154,81 @@ def sandbox_config(root: Path, live: Path) -> Config:
     return Config(path=cfg, root=live.parent)
 
 
-def live_fingerprint() -> dict[str, str]:
-    """SHA-256 of the operator's real state files.
+def _stable_read(path: Path, attempts: int = 8, wait: float = 0.2) -> bytes | None:
+    """Read a file and keep the result only if two reads in a row agree.
+
+    The operator may run a background Jarvis that appends to the live ledger
+    files while this suite runs. A single pass can catch a partial append and
+    yield a torn snapshot, which would falsely trip the "never touch live
+    state" guard below. Requiring two identical consecutive reads sidesteps
+    that: a file mid-append simply re-reads until it looks quiescent.
+    """
+    last: bytes | None = None
+    for _ in range(attempts):
+        try:
+            with path.open("rb") as handle:
+                current = handle.read()
+        except OSError:
+            return None
+        if last is not None and current == last:
+            return current
+        last = current
+        time.sleep(wait)
+    return last
+
+
+def live_fingerprint() -> dict[str, bytes]:
+    """Snapshot of the operator's real state files.
 
     The sandbox redirects every configured data path, but a hard-coded path or a
     subsystem writing outside Config.resolve would still land here. Comparing
-    this fingerprint before and after the run turns "the smoke test must never
+    this snapshot before and after the run turns "the smoke test must never
     touch live state" from a claim into an assertion.
     """
-    out: dict[str, str] = {}
+    out: dict[str, bytes] = {}
     for rel in _LIVE_STATE_FILES:
         path = REPO_ROOT / rel
         if not path.is_file():
             continue
-        digest = hashlib.sha256()
-        try:
-            with path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(1 << 20), b""):
-                    digest.update(chunk)
-        except OSError:
-            continue
-        out[rel] = digest.hexdigest()
+        content = _stable_read(path)
+        if content is not None:
+            out[rel] = content
     return out
+
+
+def live_drift(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+    """Live files that changed during the run in a way the suite must not cause.
+
+    The guard's job is to catch the suite writing to live state. A concurrent
+    operator daemon legitimately appends to the ledger files while the suite
+    runs, so a pure content compare raises a false positive. A live file is
+    therefore considered clean when it was only appended to (never created,
+    deleted, replaced or truncated) and none of the newly-appended records is
+    authored by the suite (audit category or actor ``selftest``).
+    """
+    drifted: list[str] = []
+    for rel in sorted(set(before) | set(after)):
+        before_bytes = before.get(rel)
+        after_bytes = after.get(rel)
+        if before_bytes is None:
+            if after_bytes is not None:
+                drifted.append(f"{rel}: created by a live writer")
+            continue
+        if after_bytes is None:
+            drifted.append(f"{rel}: deleted")
+            continue
+        if after_bytes == before_bytes:
+            continue
+        if not after_bytes.startswith(before_bytes):
+            drifted.append(f"{rel}: replaced or truncated")
+            continue
+        fresh = after_bytes[len(before_bytes):]
+        if len(fresh) and not fresh.endswith(b"\n"):
+            fresh = fresh.rsplit(b"\n", 1)[0]
+        for line in fresh.split(b"\n"):
+            if b'"category":"selftest"' in line or b'"actor":"selftest"' in line:
+                drifted.append(f"{rel}: {line[:140]!r}")
+    return drifted
 
 
 def main() -> int:
@@ -2463,8 +2515,7 @@ def _run(sandbox: Path) -> int:
     # hand the next one stale state.
     shutil.rmtree(REPO_ROOT / "data" / ".selftest_scratch", ignore_errors=True)
     after = live_fingerprint()
-    drifted = sorted(k for k in set(live_before) | set(after)
-                     if live_before.get(k) != after.get(k))
+    drifted = live_drift(live_before, after)
     check("live state untouched by selftest", not drifted, ", ".join(drifted))
     print(f"  PASSED: {len(PASS)}    FAILED: {len(FAIL)}")
     if FAIL:
