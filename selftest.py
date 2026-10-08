@@ -2139,6 +2139,299 @@ def _run(sandbox: Path) -> int:
     check("corrupt heartbeat still faults as state_corrupt",
           "state_corrupt" in scan_faults, str(scan_faults))
 
+    # A tiny kernel stand-in that carries only what the Phase-5 agents need:
+    # a real config and nothing else. BusinessAgent degrades a missing gate to
+    # allowed; TradingBridge must fail closed (refuse live) without one.
+    class _FakeKernel:
+        pass
+
+    _fake = _FakeKernel()
+    _fake.config = config
+    _fake.cycles = 0
+    _fake.consecutive_errors = 0
+    _fake.queue = []
+    _fake._mode = "foreground"
+    _fake.boot_time = time.time()
+
+    print("\n== business agent ==")
+    from jarvis_os import business_agent as _biz_mod
+    from jarvis_os import jsonl_store as _js
+    biz = kernel.business
+    check("business agent attached to kernel", isinstance(biz, _biz_mod.BusinessAgent))
+    check("content channel set", _biz_mod.CHANNELS == ("blog", "email", "social"),
+          str(_biz_mod.CHANNELS))
+    check("pipeline stages set",
+          _biz_mod.PIPELINE_STAGES == ("draft", "approved", "rejected", "published"))
+    check("crm stages set",
+          _biz_mod.CRM_STAGES == ("new", "contacted", "qualified", "proposal", "won", "lost"))
+    check("unknown channel refused",
+          "error" in biz.content_draft("podcast", "test topic"))
+    _blog = biz.content_draft("blog", "Selftest Notes")
+    check("draft created",
+          _blog.get("stage") == "draft" and _blog.get("channel") == "blog", str(_blog)[:160])
+    check("draft body filled", "selftest" in str(_blog.get("body", "")).lower())
+    _mail = biz.content_draft("email", "Quarterly Update", audience="partners")
+    check("email draft honours audience", "partners" in str(_mail.get("body", "")))
+    check("review of unknown id refused",
+          "error" in biz.content_review("content_zzz", "approved"))
+    check("unknown review verdict refused",
+          "error" in biz.content_review(_blog["id"], "shred"))
+    check("approve not allowed on draft",
+          biz.content_publish(_blog["id"]).get("error", "x").endswith("approve it first"))
+    check("blog row sits in draft stage",
+          any(r.get("id") == _blog["id"] and r.get("stage") == "draft"
+              for r in biz.content_list("draft")))
+    _rejected = biz.content_draft("social", "Thread Notes")
+    _rejected = biz.content_review(_rejected["id"], "rejected")
+    check("rejected review recorded", _rejected["stage"] == "rejected", str(_rejected)[:160])
+    _reviewed = biz.content_review(_blog["id"], "approved")
+    check("approved review recorded", _reviewed["stage"] == "approved", str(_reviewed)[:160])
+    _gate_in = kernel.gate._text_input
+    kernel.gate._text_input = lambda prompt: "no"
+    try:
+        _denied = biz.content_publish(_blog["id"])
+    finally:
+        kernel.gate._text_input = _gate_in
+    check("publish without approval denied",
+          "error" in _denied and "denied" in _denied["error"], str(_denied)[:160])
+    check("denied publish does not flip stage",
+          biz.content_status(_blog["id"])["stage"] == "approved")
+    kernel.gate._text_input = lambda prompt: "yes"
+    try:
+        _published = biz.content_publish(_blog["id"])
+    finally:
+        kernel.gate._text_input = _gate_in
+    check("publish with approval succeeds",
+          _published.get("stage") == "published" and _published.get("published_at"),
+          str(_published)[:160])
+    check("publish recorded in business ledger",
+          any(r.get("action") == "content_publish" and r.get("result") == "ok"
+              for r in _js.replay_records(biz.ledger_path).values()))
+    check("content_status resolves published row",
+          biz.content_status(_blog["id"])["stage"] == "published")
+    check("content_list filters by channel",
+          all(r["channel"] == "blog" for r in biz.content_list(channel="blog")))
+    check("content_list filters by stage",
+          all(r["stage"] == "published" for r in biz.content_list(stage="published")))
+    check("empty lead name refused", "error" in biz.lead_add(""))
+    _lead1 = biz.lead_add("Acme Corp", company="Acme", email="biz@acme.test", source="selftest")
+    biz.lead_add("Beta Inc")
+    check("lead added new", _lead1.get("stage") == "new" and _lead1.get("score") == 0)
+    check("unknown lead touch refused",
+          "error" in biz.lead_add_touch("lead_zzz", "email", "nope"))
+    _touched = biz.lead_add_touch(_lead1["id"], "email", "intro sent")
+    check("lead touch appended", _touched["touches"][-1]["method"] == "email", str(_touched)[:240])
+    check("invalid lead stage refused",
+          "error" in biz.lead_move_stage(_lead1["id"], "archived"))
+    _moved = biz.lead_move_stage(_lead1["id"], "qualified")
+    check("lead stage move applied", _moved["stage"] == "qualified", str(_moved)[:160])
+    check("non-numeric score refused",
+          "error" in biz.lead_set_score(_lead1["id"], "hi"))
+    check("lead score clamped low", biz.lead_set_score(_lead1["id"], -7)["score"] == 0)
+    check("lead score clamped high", biz.lead_set_score(_lead1["id"], 999)["score"] == 100)
+    _scored = biz.lead_set_score(_lead1["id"], 85)
+    check("lead score applied", _scored["score"] == 85 and biz.lead_get(_lead1["id"])["score"] == 85)
+    check("leads filter by stage",
+          {r["id"] for r in biz.leads(stage="qualified")} == {_lead1["id"]})
+    check("leads filter by min_score",
+          all(r["score"] >= 60 for r in biz.leads(min_score=60)))
+    _leadsum = biz.leads_summary()
+    check("leads summary per-stage counts", _leadsum["per_stage"].get("qualified") == 1,
+          str(_leadsum)[:240])
+    check("funnel report mentions win rate", "win_rate" in biz.funnel_report())
+    _headless = _biz_mod.BusinessAgent(_fake, config)
+    _hc = _headless.content_status(_headless.content_publish(
+        _headless.content_review(_headless.content_draft("blog", "Headless run")["id"],
+                                 "approved")["id"])["id"])
+    check("business publish degrades to allowed without a gate",
+          _hc and _hc["stage"] == "published", str(_hc)[:160])
+
+    print("\n== trading bridge ==")
+    from jarvis_os import trading_bridge as _trd_mod
+    from jarvis_os.trading_bridge import MARKET_SNAPSHOT
+    trd = kernel.trading
+    check("trading bridge attached to kernel", isinstance(trd, _trd_mod.TradingBridge))
+    check("config seeds monk profile", trd.risk_profile()["name"] == "monk",
+          str(trd.risk_profile())[:160])
+    check("dry_run flag honoured", trd.dry_run_enabled() is True)
+    check("asset resolves from snapshot", trd.asset("BTC")["price"] == 64000.0)
+    check("unknown asset refused", trd.asset("NOPE") is None)
+    check("asset lookup succeeds", trd.symbol("GLD")["symbol"] == "GLD")
+    check("market snapshot deterministic", trd.market() == trd.market())
+    _btc = trd.analyze("BTC")
+    check("analyze returns signal fields",
+          {"symbol", "price", "sma20", "sma50", "rsi", "volatility", "signal"} <= set(_btc),
+          str(_btc)[:240])
+    check("analyze rsi inbound", 0 <= _btc["rsi"] <= 100, str(_btc)[:240])
+    check("analyze unknown refused", "error" in trd.analyze("NOPE"))
+    check("sma static method",
+          trd.sma([1.0, 2.0, 3.0, 4.0], 4) == round(10.0 / 4, 4))
+    check("rsi static method returns bounded value",
+          0.0 <= trd.rsi([50.0] * 40, 14) <= 100.0)
+    check("volatility static method finite", trd.volatility([1.0] * 30, 20) == 0.0)
+    _ok, _why = trd.compliance_check("NOPE", "buy", 1)
+    check("compliance refuses unknown symbol", not _ok and "NOPE" in _why, _why)
+    _ok, _why = trd.compliance_check("BTC", "hodl", 1)
+    check("compliance refuses bad side", not _ok and "side" in _why, _why)
+    _ok, _why = trd.compliance_check("GLD", "buy", "abc")
+    check("compliance refuses non-numeric qty", not _ok and "number" in _why, _why)
+    _ok, _why = trd.compliance_check("GLD", "buy", 0)
+    check("compliance refuses zero qty", not _ok and "positive" in _why, _why)
+    _ok, _why = trd.compliance_check("BTC", "buy", 1)
+    check("crypto disallowed under monk preset", not _ok and "disallowed" in _why, _why)
+    _ok, _why = trd.compliance_check("GLD", "buy", 1000)
+    check("oversized notional refused by cap", not _ok and "cap" in _why, _why)
+    _ok, _why = trd.compliance_check("GLD", "buy", 10)
+    check("small gold order compliant", _ok, _why)
+    check("execute unknown symbol errors",
+          "error" in trd.execute("NOPE", "buy", 1))
+    _refused_side = trd.execute("BTC", "hodl", 1)
+    check("execute bad side refused", _refused_side.get("decision") == "refused",
+          str(_refused_side)[:160])
+    _dry = trd.execute("GLD", "buy", 10)
+    check("dry-run order written", _dry["result"] == "dry_run", str(_dry)[:200])
+    kernel.gate._text_input = lambda prompt: "no"
+    try:
+        _denied_exec = trd.execute("GLD", "buy", 10, live=True)
+    finally:
+        kernel.gate._text_input = _gate_in
+    check("live execution without approval denied",
+          _denied_exec["mode"] == "denied", str(_denied_exec)[:200])
+    kernel.gate._text_input = lambda prompt: "yes"
+    try:
+        _approved_exec = trd.execute("GLD", "buy", 10, live=True)
+    finally:
+        kernel.gate._text_input = _gate_in
+    check("live execution with approval approved",
+          _approved_exec["mode"] == "approved_simulated", str(_approved_exec)[:200])
+    check("approved order in trading ledger",
+          any(o.get("id") == _approved_exec["id"] and o.get("result") == "approved"
+              for o in trd.ledger()))
+    _pnl = trd.pnl()
+    check("pnl tracks approved position",
+          any(r["symbol"] == "GLD" for r in _pnl["positions"]) and _pnl["unrealized"] == 0.0,
+          str(_pnl)[:240])
+    _headless_bridge = _trd_mod.TradingBridge(_fake, config)
+    _no_gate = _headless_bridge.execute("GLD", "buy", 10, live=True)
+    check("gate-less bridge refuses live execution",
+          _no_gate["result"] == "refused", str(_no_gate)[:200])
+    _whales = trd.scan_whales()
+    check("whale radar flags threshold events", len(_whales) == 3, str(_whales)[:400])
+    check("whale radar dedupes on rescan", trd.scan_whales() == [])
+    _open_alerts = trd.alerts()
+    check("alerts surface open whales", len(_open_alerts) == 3, str(_open_alerts)[:200])
+    check("resolve unknown alert refused",
+          "error" in trd.resolve_alert("alert_zzz", "ignore"))
+    check("resolve bad decision refused",
+          "error" in trd.resolve_alert(_open_alerts[0]["id"], "sleep"))
+    _resolved = trd.resolve_alert(_open_alerts[0]["id"], "ignore")
+    check("resolve alert records decision",
+          _resolved["status"] == "ignore" and _resolved.get("resolved_at"), str(_resolved)[:200])
+    _trd_status = trd.status()
+    check("status line shows profile and mode",
+          "profile=monk" in _trd_status and "DRY-RUN" in _trd_status, _trd_status[:240])
+    command_regress = kernel.text_iface
+    check("execute without qty is safe usage (len-3 regression)",
+          not _raises(lambda: command_regress.cmd_trading(["execute", "GLD", "buy"])))
+    check("execute with non-numeric qty is safe usage (float regression)",
+          not _raises(lambda: command_regress.cmd_trading(["execute", "GLD", "buy", "abc"])))
+    check("interface dry-run execute works",
+          not _raises(lambda: command_regress.cmd_trading(["execute", "GLD", "buy", "10"])))
+    kernel.gate._text_input = lambda prompt: "yes"
+    try:
+        _approved_cmd = (not _raises(
+            lambda: command_regress.cmd_trading(["execute", "GLD", "buy", "10", "--live"])))
+    finally:
+        kernel.gate._text_input = _gate_in
+    check("interface --live execute accepted (len-5 regression)", _approved_cmd)
+    check("interface trading status works",
+          not _raises(lambda: command_regress.cmd_trading(["status"])))
+    check("interface business status works",
+          not _raises(lambda: command_regress.cmd_business(["status"])))
+
+    print("\n== rich terminal dashboard ==")
+    from jarvis_os.dashboard import Dashboard
+    dash = Dashboard(kernel)
+    _plain = dash.render_plain()
+    for _needle in ("Jarvis OS |", "llm:", "memory:", "index:", "gate:",
+                    "business:", "trading:", "heartbeat:", "overseer:",
+                    "daemon:", "voice:"):
+        check(f"dashboard renders {_needle.strip(':')} section", _needle in _plain)
+    check("dashboard shows funnel report", "funnel:" in _plain)
+    _glyph = dash.render()
+    check("dashboard rich render falls back or panels", len(_glyph) > 0)
+    check("rich dashboard render carries title",
+          ("Dashboard" in _glyph) if _glyph != _plain else _plain != "", _glyph[:80])
+    from jarvis_os.dashboard import Dashboard as _Dash2
+    _fake_dash = _Dash2(_fake, config)
+    _fake_plain = _fake_dash.render_plain()
+    check("fake kernel dashboard still renders agents",
+          "business:" in _fake_plain and "trading:" in _fake_plain, _fake_plain[:240])
+
+    print("\n== voice mode ==")
+    from jarvis_os.interfaces.voice import VoiceCommandInterface, WAKE_RE
+    vif = kernel.voice_iface
+    check("voice interface attached and disabled by feature flag",
+          isinstance(vif, VoiceCommandInterface)
+          and not vif.enabled and not vif.voice_active())
+    _avail = vif.availability()
+    check("voice availability reports all backends",
+          {"pyttsx3", "speech_recognition", "pyaudio", "sounddevice"} <= set(_avail),
+          str(sorted(_avail)))
+    _vstatus = vif.status()
+    check("voice status reports OFF", _vstatus.startswith("voice: OFF"), _vstatus)
+    check("voice install hint mentions packages", "pip install" in vif.install_hint())
+    check("voice said_count starts at 0", vif.said_count == 0)
+    check("say when disabled returns False and prints prefix",
+          vif.say("Hello, Sir.", translate=False) is False)
+    check("honorific prefix applied by language layer",
+          kernel.language.prefix("Hello").startswith(config.honorific()))
+    check("kernel set_voice status is safe",
+          "voice:" in kernel.set_voice("status") or "|" in kernel.set_voice("status"))
+    _off_msg = kernel.set_voice("off")
+    check("kernel set_voice off keeps interface disabled",
+          isinstance(_off_msg, str) and "off" in _off_msg.lower()
+          and not vif.enabled and not kernel.voice_daemon.running)
+    _orig_listen = vif.listen
+    vif.listen = lambda timeout=None, phrase_limit=None: "approve"
+    try:
+        check("capture_answer returns approve verdict",
+              vif.capture_answer("Approve publish?") == "approve")
+    finally:
+        vif.listen = lambda timeout=None, phrase_limit=None: "deny"
+        check("capture_answer returns deny verdict",
+              vif.capture_answer("Approve publish?") == "deny")
+        vif.listen = _orig_listen
+    _voice_hist = len(kernel.text_iface.history)
+    vif.command("Jarvis, business content list")
+    check("voice command strips wake word and dispatches",
+          kernel.text_iface.history[-1] == "> business content list",
+          kernel.text_iface.history[-1])
+    _voice_hist2 = len(kernel.text_iface.history)
+    vif.command("Jarvis")
+    check("bare wake word is a no-op",
+          len(kernel.text_iface.history) == _voice_hist2)
+    check("wake regex matches with comma", bool(WAKE_RE.search("Jarvis, status")))
+    check("voice remains disabled after off",
+          not vif.enabled and _off_msg.count("off") >= 1)
+
+    print("\n== mandatory approval gates ==")
+    from jarvis_os.permissions import MANDATORY_APPROVAL
+    check("business_publish in mandatory approval set",
+          "business_publish" in MANDATORY_APPROVAL)
+    check("trading_exec in mandatory approval set",
+          "trading_exec" in MANDATORY_APPROVAL)
+    check("business gate requires approval",
+          kernel.gate.requires_approval("business_publish"))
+    check("trading gate requires approval",
+          kernel.gate.requires_approval("trading_exec"))
+    for _cat in ("business_publish", "trading_exec"):
+        try:
+            kernel.gate.auto_allow(_cat)
+            check(f"mandatory category {_cat} cannot be auto-allowed", False)
+        except PermissionError:
+            check(f"mandatory category {_cat} cannot be auto-allowed", True)
+
     print("\n== memory durability across restart ==")
     memory_snapshot = kernel.memory.stats["memories"]
     lessons_snapshot = kernel.memory.stats["lessons"]
@@ -2162,7 +2455,7 @@ def _run(sandbox: Path) -> int:
     check("overseer isolation cleared", "armed again" in cleared, cleared)
     check("gate armed after clear", kernel.gate.armed)
     check("control file removed",
-          not kernel.config.resolve("data/overseer_control.json").exists())
+          not kernel.config.resolve("overseer.control_file").exists())
 
     kernel.shutdown()
     # The sandbox tree itself is torn down by main()'s finally on every exit

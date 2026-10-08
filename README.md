@@ -45,11 +45,21 @@ Jarvis says so and every other subsystem keeps working.
 | `python jarvis.py` | Interactive REPL |
 | `python jarvis.py --goal "..."` | Decompose and execute one goal, then exit |
 | `python jarvis.py --loop` | Infinite heartbeat loop (Ctrl+C to stop) |
+| `python jarvis.py --loop --cycles N` | Heartbeat loop capped at N cycles |
 | `python jarvis.py --daemon` | Run in the background, recallable via `background attach` |
+| `python jarvis.py --attach` | Recall a running background instance |
 | `python jarvis.py --overseer` | Run **only** the watchdog process |
+| `python jarvis.py --no-overseer` | Disable the watchdog for this session (never written to config.json) |
 | `python jarvis.py --no-voice` | Force the text interface |
 | `python jarvis.py --voice` | Start the background voice daemon for this session (never written to config.json) |
+| `python jarvis.py --voice-mode` | Hands-free voice loop for the session (never written to config.json) |
 | `python jarvis.py --honorific "Madam"` | Change the form of address |
+| `python jarvis.py --dashboard` | Render the live OS dashboard, then exit |
+| `python jarvis.py --plan "<goal>"` | Decompose a goal into a step DAG, print it, then exit |
+| `python jarvis.py --remember "..."` | Store a fact in memory + local index, then exit |
+| `python jarvis.py --translate "..." [--to en\|ta]` | Translate offline, then exit |
+| `python jarvis.py --device <subcommand>` | Device sync admin (`serve`, `add`, ...), then exit |
+| `python jarvis.py --sync [id ...]` | Sync one device / all devices, then exit |
 | `python jarvis.py --build "<spec>"` | One-shot: generate + install software, then exit (permission-gated) |
 | `python jarvis.py --install <id>` | One-shot: install a built program, then exit |
 | `python jarvis.py --launch <id>` | One-shot: launch an installed program, then exit |

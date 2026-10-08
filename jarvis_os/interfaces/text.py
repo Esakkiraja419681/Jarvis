@@ -340,12 +340,18 @@ class TextCommandInterface:
             result = bridge.resolve_alert(args[1], args[2])
             self.say(result.get("error") or f"alert {args[1]} -> {args[2]}")
         elif sub == "execute":
-            if len(args) not in (3, 4) or args[2].lower() not in ("buy", "sell"):
+            if len(args) not in (4, 5) or args[2].lower() not in ("buy", "sell"):
                 self.say("Usage: trading execute <symbol> <buy|sell> <qty> [--live]")
                 return
-            live = len(args) == 4 and args[3] == "--live"
+            try:
+                qty = float(args[3])
+            except ValueError:
+                self.say("Usage: trading execute <symbol> <buy|sell> <qty> [--live] "
+                         "(qty must be a number, Sir)")
+                return
+            live = len(args) == 5 and args[4] == "--live"
             order = bridge.execute(args[1].upper(), args[2].lower(),
-                                   float(args[3]), live=live)
+                                   qty, live=live)
             mode = order.get("mode", "?")
             self.say(f"{mode}: {order.get('symbol')} {order.get('side')} "
                      f"{order.get('qty')} @ {order.get('price')}")
