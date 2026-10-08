@@ -27,6 +27,8 @@ data/*.pid
 # these the snapshot would sweep its own output back into the commit.
 data/.selftest_baseline.json
 data/.selftest_scratch/
+run_new.log
+err_new.log
 
 # Persistent memory, audit ledger and Phase 5 state (business/CRM/content/
 # trading ledgers and alerts), never committed. The single glob also covers any
@@ -46,6 +48,12 @@ data/plan_state.json
 # per install and must never reach git (like config.json above).
 data/pairing.token
 data/tls/
+
+# Live daemon runtime state: pid and overseer control records are rewritten
+# while a background Jarvis runs, so they must never be tracked (like the
+# *.pid / heartbeat entries above).
+data/daemon_state.json
+data/overseer_control.json
 
 # Offline model caches: multi-GB and re-downloadable, never committed.
 data/langcache/

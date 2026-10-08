@@ -22,7 +22,7 @@ python jarvis.py
 # bounded loop for a smoke test
 python jarvis.py --loop --cycles 2
 
-# full self-test suite (424 checks)
+# full self-test suite (537 checks)
 python selftest.py
 ```
 
