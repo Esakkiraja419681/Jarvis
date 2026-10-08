@@ -1,0 +1,792 @@
+
+== memory ==
+  [PASS] recall finds memory
+  [PASS] hash chains intact
+  [PASS] vector store populated
+  [PASS] purge refused without manual token
+  [PASS] memory survives refusal
+  [PASS] purge refused for every token
+  [PASS] memory never wiped
+  [PASS] lessons never wiped
+
+== permission gate ==
+
+[PERMISSION] Sir, manual approval required for 'self_learn'. test
+  type yes/allow (or no/deny) ->   [PASS] approve word accepted
+
+[PERMISSION] Sir, manual approval required for 'self_evolution'. test
+  type yes/allow (or no/deny) ->   [PASS] deny word refused
+
+[PERMISSION] Sir, manual approval required for 'skill_add'. test
+  type yes/allow (or no/deny) ->   [PASS] garbage refused
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. t
+  type yes/allow (or no/deny) ->   [PASS] voice approve accepted
+
+[PERMISSION] Sir, manual approval required for 'external_ai'. t
+  type yes/allow (or no/deny) ->   [PASS] voice deny refused
+  [PASS] mandatory category cannot be auto-allowed
+  [PASS] disarmed gate refuses despite approval
+  [PASS] disarmed gate refuses despite approval
+
+[PERMISSION] Sir, manual approval required for 'self_update'. t
+  type yes/allow (or no/deny) ->   [PASS] overseer repair can override the disarm it caused
+  [PASS] external AI needs live approval
+  [PASS] non-local host refused
+
+== audit ==
+  [PASS] audit chain verifies
+  [PASS] permission decisions logged
+
+== concurrent multi-process audit ==
+  [PASS] second process wrote to the shared ledger
+  [PASS] chain intact after interleaved writers
+  [PASS] no events lost
+
+== sandbox ==
+  [PASS] sandbox runs code
+  [PASS] sandbox blocks socket import
+  [PASS] sandbox enforces timeout
+  [PASS] sandbox root removed to simulate a vanished temp dir
+  [PASS] sandbox recreates a vanished root
+  [PASS] recreated sandbox root is a directory
+  [PASS] sandbox reports an unusable root by name
+  [PASS] shell rejects metacharacters
+  [PASS] shell allows python
+
+== tools ==
+  [PASS] file_write
+  [PASS] file_read
+  [PASS] path escape blocked
+  [PASS] shell tool executes
+  [PASS] external AI host refused by web_fetch
+
+== dynamic registration ==
+  [PASS] invalid tool name rejected
+  [PASS] runtime tool registered
+  [PASS] runtime tool callable
+  [PASS] default team present
+  [PASS] agent command exposed in REPL
+  coder [coder] tasks=0 ok=0 fail=0 tools=4
+  guardian [guardian] tasks=0 ok=0 fail=0 tools=0
+  operator [operator] tasks=0 ok=0 fail=0 tools=2
+  orchestrator [orchestrator] tasks=0 ok=0 fail=0 tools=3
+  planner [planner] tasks=0 ok=0 fail=0 tools=0
+  researcher [researcher] tasks=0 ok=0 fail=0 tools=4
+  reviewer [reviewer] tasks=0 ok=0 fail=0 tools=2
+  [PASS] agent list lists the default team
+Registered agent 'scribe' [archivist] as ag_27b635ea. 8 agent(s) live.
+  [PASS] agent add registers at runtime
+  [PASS] agent add agent is functional (has live tool registry)
+  [PASS] duplicate agent add refused
+  [PASS] agent remove unregisters
+  [PASS] agent remove unknown reports cleanly
+  [PASS] agent add usage on missing role
+  [PASS] agent subcommand misuse shows usage
+
+== language layer ==
+  [PASS] Tamil detected
+  [PASS] Tamil name resolved
+  [PASS] English detected
+  [PASS] Tamil script detected via detection()
+  [PASS] responses honorific-prefixed
+  [PASS] honorific not doubled
+  [PASS] model Tamil honorific stripped
+  [PASS] model 'Sir' plus Tamil honorific both stripped
+  [PASS] real word starting with an honorific is preserved
+  [PASS] real word starting with 'திரு' is preserved
+  [PASS] mid-sentence honorific is never stripped
+  [PASS] translation never auto-downloads models
+  [PASS] no argos boot hook remains
+  [PASS] nllb weights detected before the rename
+  [PASS] nllb weights absent after the rename
+  [PASS] missing model returns the source unchanged
+  [PASS] skip note never reaches the operator
+  [PASS] a passthrough is recorded in the audit ledger
+  [PASS] the audit record names the real cause
+  [PASS] the audit record marks it a passthrough, not a success
+  [PASS] skip reason still names nllb
+Sir, Jarvis OS online. Ollama is the only permitted AI backend.
+  [PASS] banner carries no translation skip note
+  [PASS] banner still gets the honorific
+  [PASS] banner keeps its own text
+Sir, Shutting down. Memory preserved.
+  [PASS] goodbye carries no translation skip note
+  [PASS] goodbye still gets the honorific
+  [PASS] goodbye keeps its own text
+Sir, Unknown command: frobnicate
+  [PASS] unknown command carries no translation skip note
+  [PASS] unknown command still gets the honorific
+  [PASS] unknown command keeps its own text
+Sir, வணக்கம்
+  [PASS] tamil greeting round-trips without a note
+  [PASS] tamil greeting stays renderable
+  [PASS] fallback backend used before reporting unavailable
+  [PASS] fallback layer still reports nllb as not ready
+  [PASS] fabricated model tree cleaned up
+  [PASS] weight-size gate restored
+
+== software factory ==
+
+[PERMISSION] Sir, manual approval required for 'software_install'. Jarvis requests permission to generate and install new software.
+  spec: hello world greeting program
+  type yes/allow (or no/deny) ->   [PASS] software built
+
+[PERMISSION] Sir, manual approval required for 'software_install'. Install and register 'hello_sir' (sw_0d306688)?
+  type yes/allow (or no/deny) ->   [PASS] software installed
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to start software 'sw_0d306688'.
+  type yes/allow (or no/deny) ->   [PASS] software launched
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to status software 'sw_0d306688'.
+  type yes/allow (or no/deny) ->   [PASS] software status reachable
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to logs software 'sw_0d306688'.
+  type yes/allow (or no/deny) ->   [PASS] software logs captured
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to stop software 'sw_0d306688'.
+  type yes/allow (or no/deny) ->   [PASS] registry tracks program
+  [PASS] fresh factory restores bridge registration
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to status software 'sw_0d306688'.
+  type yes/allow (or no/deny) ->   [PASS] restored registration is controllable
+  [PASS] stopped program persists no running pid
+
+[PERMISSION] Sir, manual approval required for 'software_install'. Jarvis requests permission to generate and install new software.
+  spec: hello world greeting program
+  type yes/allow (or no/deny) ->   [PASS] unrunnable model output still yields a runnable build
+  [PASS] rescued build says it degraded
+  [PASS] rescued build actually executes
+
+== self update ==
+  [PASS] git repo initialised
+  [PASS] memory protected in gitignore
+  [PASS] memory not tracked by git
+  [PASS] snapshot taken
+  [PASS] protect_memory is idempotent
+  [PASS] protect_memory leaves a protected file byte-identical
+  [PASS] protect_memory preserved blank lines
+  [PASS] protect_memory preserved every comment
+  [PASS] protect_memory preserved comment placement
+  [PASS] protect_memory is idempotent when appending
+  [PASS] protect_memory appended without touching existing bytes
+  [PASS] protect_memory added the header exactly once
+  [PASS] every memory glob is present after appending
+  [PASS] no pre-existing rule was dropped
+  [PASS] appended rules sit under the header
+  [PASS] gitignore scratch dirs cleaned up
+
+== evolution engine ==
+  [PASS] propose phase enabled
+  [PASS] dry-run does not request approval
+  [PASS] apply phase toggled off
+
+== overseer ==
+
+[PERMISSION] Sir, manual approval required for 'background_daemon'. Jarvis requests permission to start itself in the background.
+It will keep running after you close this window.
+  type yes/allow (or no/deny) ->   [PASS] runaway detected
+  [PASS] hallucination detected
+  [PASS] error storm detected
+  [PASS] stale heartbeat from a dead pid is not a stall
+  [PASS] an ancient leftover from a dead run is not a stall
+  [PASS] stall still detected for the live process
+  [PASS] a missing heartbeat is still reported
+  [PASS] watchdog adopts the supervised pid
+  [PASS] watchdog recognises the run it watches
+  [PASS] watchdog still rejects a foreign heartbeat
+  [PASS] watchdog refuses to adopt a dead pid
+  [PASS] dead-pid heartbeat is not read as the supervised run
+  [PASS] ancient dead-run leftover survives an adopting scan
+  [PASS] isolation records the incident id
+  [PASS] isolation flags the layer
+  [PASS] incident recorded
+  [PASS] cross-layer trace produced
+  [PASS] overseer logged to shared ledger
+
+== repl heartbeat ==
+  [PASS] kernel and overseer agree on the heartbeat path
+  [PASS] no stale heartbeat to mistake for a fresh one
+  [PASS] heartbeat refresher starts for an interactive session
+  [PASS] heartbeat written immediately, before any command
+  [PASS] heartbeat is owned by this process
+  [PASS] repl heartbeat reports interactive, not daemon
+  [PASS] fresh heartbeat is not a stall
+  [PASS] overseer accepts the beat as its own
+  [PASS] beat interval sits inside the stall timeout
+  [PASS] beat interval follows a shorter stall timeout
+  [PASS] heartbeat refreshed while idle
+  [PASS] idle refresh stays inside the stall timeout
+  [PASS] idle refresh is not a stall fault
+  [PASS] heartbeat refresher stops cleanly
+  [PASS] a second refresher is refused
+  [PASS] no duplicate heartbeat thread was created
+  [PASS] mode foreground recorded
+  [PASS] mode interactive recorded
+  [PASS] mode daemon recorded
+  [PASS] unknown mode rejected
+  [PASS] overseer feature restored
+  [PASS] ungated overseer refuses to rewrite source
+  [PASS] ungated refusal is audited
+
+== task manager ==
+
+== goal tool discipline ==
+  [PASS] greeting goal still produces a plan
+  [PASS] greeting plan asks for no tools
+  [PASS] greeting plan never names web_fetch
+  [PASS] greeting plan produces no invented tools
+  [PASS] classifier accepts a bilingual greeting
+  [PASS] classifier accepts a single greeting
+  [PASS] classifier accepts a translation request
+  [PASS] classifier accepts a thanks
+  [PASS] classifier rejects a greeting plus a real task
+  [PASS] classifier rejects a research goal
+  [PASS] classifier rejects an empty goal
+  [PASS] classifier does not fire on a research plan
+  [PASS] research goal still plans
+  [PASS] unexecuted tools make a result partial
+  [PASS] partial result still reports ok
+  [PASS] executed tools are not partial
+  [PASS] a plan with no tools is not partial
+  [PASS] to_dict carries the tool evidence
+  [PASS] a plan whose tools never ran is partial
+  [PASS] the unexecuted tool is named
+  [PASS] execute() still returns the agent's text
+  [PASS] run announces PARTIAL when tools did not execute
+  [PASS] run names the tool that never ran
+  [PASS] run still delivers the reply
+  [PASS] the reply carries no translation skip note
+  [PASS] every line the operator sees is honorific-prefixed
+  [PASS] run announces INCOMPLETE on total failure
+  [PASS] a total failure is not reported as partial
+  [PASS] a failed run still gets the honorific
+  [PASS] decomposition produces subtasks
+  [PASS] final task depends on others
+  [PASS] agent routing by keyword
+
+== devices & daemon ==
+  [PASS] local device registered
+  [PASS] device registry persisted
+  [PASS] remote config brake engaged
+  [PASS] remote config is off by default
+  [PASS] no phantom host twin in the live registry
+  [PASS] live registry holds only the local device
+  [PASS] daemon status available
+  [PASS] simulated daemon reports alive
+  [PASS] mid-session recall does not restart the prompt loop
+  [PASS] mid-session recall reports a reattach
+  [PASS] mid-session recall keeps the same kernel
+
+     _                       ____  ____
+    | |                     / ___||  _ \
+    | | __ _ _ __ __ _  ___  \___ \| |_) |
+    | |/ _` | '__/ _` |/ _ \  ___) |  _ <
+    | | (_| | | | (_| |  __/ /____/ |_| \_\   OS
+    |_|\__,_|_|  \__, |\___||_____/|____/
+                 |___/   self-evolving agentic OS
+
+  [PASS] cold recall starts the loop exactly once
+  [PASS] cold recall announces the reattach
+  [PASS] reattach did not reboot the kernel
+  [PASS] reattach kept memory intact
+  [PASS] attach counted the continuous session
+  [PASS] unbound handle explains how to reattach
+
+== control bridge ==
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to start software 'smoke_proc'.
+  type yes/allow (or no/deny) ->   [PASS] process started via bridge
+  [PASS] process reported alive
+  [PASS] unknown action rejected
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to stop software 'smoke_proc'.
+  type yes/allow (or no/deny) -> 
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to configure software 'smoke_proc'.
+  type yes/allow (or no/deny) ->   [PASS] configure writes env file
+
+== ipc command bridge ==
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to status software 'smoke_proc'.
+  type yes/allow (or no/deny) ->   [PASS] ipc round-trip executes the command
+  [PASS] ipc response file written for the caller
+  [PASS] ipc response file carries the verdict
+  [PASS] ipc bad token refused
+  [PASS] refused command file cleared after poll
+  [PASS] refused command does not overwrite the response
+  [PASS] refused ipc never reaches dispatch
+  [PASS] gui exposed as a control-bridge action
+
+[PERMISSION] Sir, manual approval required for 'software_control'. Jarvis requests permission to operate the desktop GUI (warp).
+  type yes/allow (or no/deny) ->   [PASS] gui rejects unknown sub-action
+  [PASS] legacy jarvis_os.control module renamed away
+
+== dynamic tool validation ==
+
+[PERMISSION] Sir, manual approval required for 'skill_add'. Jarvis requests permission to register a new dynamic tool.
+  tool : st_dyn_tool
+  entry: run
+  bytes: 118
+  type yes/allow (or no/deny) ->   [PASS] validated tool registered
+  [PASS] dynamic tool present and callable
+  [PASS] dynamic tool marked dangerous code_exec
+  [PASS] dynamic tool is not builtin
+  [PASS] network import rejected statically
+  [PASS] eval rejected statically
+  [PASS] open rejected statically
+  [PASS] syntax error rejected statically
+  [PASS] invalid tool name rejected statically
+
+[PERMISSION] Sir, manual approval required for 'skill_add'. Jarvis requests permission to register a new dynamic tool.
+  tool : st_boom_tool
+  entry: run
+  bytes: 46
+  type yes/allow (or no/deny) ->   [PASS] raising tool fails the sandbox probe
+  [PASS] raising tool never reaches the registry
+
+[PERMISSION] Sir, manual approval required for 'skill_add'. Jarvis requests permission to register a new dynamic tool.
+  tool : st_denied_tool
+  entry: run
+  bytes: 118
+  type yes/allow (or no/deny) ->   [PASS] gate denial blocks registration
+  [PASS] denied tool never reaches the registry
+
+== ocr & dependency wiring ==
+  [PASS] ocr returns a dict verdict, never an exception
+  [PASS] ocr returns text payload
+  [PASS] click_text requires a text argument
+  [PASS] requirements.txt declares pytesseract
+  [PASS] setup script installs and reports pytesseract
+
+== cli action flags ==
+  [PASS] --build parses the spec
+  [PASS] --install parses the program id
+  [PASS] --launch parses the program id
+  [PASS] --control parses id and action
+  [PASS] --stop parses the program id
+  [PASS] --tools parses
+  [PASS] action flags default to inert (no accidental action)
+  [PASS] --device parses subcommand words
+  [PASS] --sync parses ids (bare --sync = all)
+  [PASS] --translate parses text and target
+  [PASS] --plan parses a goal string
+  [PASS] --remember parses a fact string
+  [PASS] one-shot plan/remember flags default to inert
+  [PASS] build_parser exposes a callable factory
+
+== language layer ==
+  [PASS] language layer wired into the kernel
+  [PASS] respond prefixes the honorific
+  [PASS] respond is idempotent
+  [PASS] translate reports already-in-target
+  [PASS] already message honors
+  [PASS] unsupported target refused
+  [PASS] empty text refused
+  [PASS] degraded translation is honest, not silent
+  [PASS] intent: translate with quoted entity
+  [PASS] intent: remember
+  [PASS] intent: greeting
+  [PASS] 'this' does not fire 'hi'
+  [PASS] intent: Tamil translate keyword
+  [PASS] intent: stop
+  [PASS] intent: time
+  [PASS] intent: unknown at zero confidence
+  [PASS] intent messages honor
+  [PASS] language layer feature fails closed
+  [PASS] language layer status complete
+
+== device sync ==
+  [PASS] device sync wired into the kernel
+  [PASS] device sync report renders
+  [PASS] command router defaults to status
+  [PASS] unknown verb shows usage
+  [PASS] dispatch without args shows usage
+  [PASS] tls material generated
+  [PASS] cert file exists
+  [PASS] tls is generated once
+  [PASS] pairing token created
+  [PASS] pairing token stable
+  [PASS] parse ssh endpoint
+  [PASS] parse wss endpoint
+  [PASS] ssh default port
+  [PASS] http endpoint refused
+  [PASS] plain ws endpoint refused
+  [PASS] websockets transport present
+  [PASS] tls transport present
+  [PASS] sync with no peers is a no-op
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to register a remote device.
+  id: phone1
+  endpoint: ssh://u@127.0.0.1:20223
+  type yes/allow (or no/deny) ->   [PASS] peer device registered
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to register a remote device.
+  id: bare
+  endpoint: unknown
+  type yes/allow (or no/deny) -> 
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to register a remote device.
+  id: insecure
+  endpoint: ws://1.2.3.4:9
+  type yes/allow (or no/deny) ->   [PASS] dispatch refuses empty id
+  [PASS] dispatch to unregistered device refused
+  [PASS] dispatch to this machine refused
+  [PASS] dispatch without endpoint refused
+  [PASS] plain ws endpoint refused at dispatch
+  [PASS] alert without args shows usage
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to dispatch a command to a device.
+  device:   phone1
+  endpoint: ssh://u@127.0.0.1:20223
+  scheme:   ssh
+  command:  echo hi
+  type yes/allow (or no/deny) ->   [PASS] dispatch denied by operator
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to send an alert to a device.
+  device:   phone1
+  endpoint: ssh://u@127.0.0.1:20223
+  message:  selftest alert
+  type yes/allow (or no/deny) ->   [PASS] alert denied by operator
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to dispatch a command to a device.
+  device:   phone1
+  endpoint: ssh://u@127.0.0.1:20223
+  scheme:   ssh
+  command:  echo hi
+  type yes/allow (or no/deny) ->   [PASS] ssh dispatch fails gracefully when refused
+  [PASS] ssh failure is bounded
+  [PASS] device registry lists peers
+  [PASS] device sync status string
+  [PASS] feature off flips status
+  [PASS] device sync feature fails closed
+
+== device sync server ==
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to start the encrypted device sync server.
+  bind:     127.0.0.1:0
+  protocol: wss (TLS 825-day local certificate)
+  token:    3af959a5...
+  peers pair with: --device add <id> wss://<host>:<port>
+  type yes/allow (or no/deny) ->   [PASS] sync server starts
+  [PASS] ephemeral port bound
+  [PASS] endpoint is wss
+  [PASS] start returns the pairing token
+  [PASS] second start is idempotent
+  [PASS] bad pairing token refused
+  [PASS] handshake acked
+  [PASS] status pushed after auth
+  [PASS] inbound command refused
+  [PASS] inbound alert acknowledged
+  [PASS] status stream received
+  [PASS] bye closes the connection
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to register a remote device.
+  id: syncbox
+  endpoint: wss://127.0.0.1:55433
+  type yes/allow (or no/deny) ->   [PASS] local server registered as a peer
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to dispatch a command to a device.
+  device:   syncbox
+  endpoint: wss://127.0.0.1:55433
+  scheme:   wss
+  command:  echo hi
+  type yes/allow (or no/deny) ->   [PASS] wss dispatch reaches the peer and is refused
+  [PASS] TOFU pin written on first handshake
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to dispatch a command to a device.
+  device:   syncbox
+  endpoint: wss://127.0.0.1:55433
+  scheme:   wss
+  command:  echo hi
+  type yes/allow (or no/deny) ->   [PASS] pin mismatch refused
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to dispatch a command to a device.
+  device:   syncbox
+  endpoint: wss://127.0.0.1:55433
+  scheme:   wss
+  command:  echo hi
+  type yes/allow (or no/deny) ->   [PASS] restored pin reaches the peer again
+
+[PERMISSION] Sir, manual approval required for 'cross_device'. Jarvis requests permission to probe 1 paired device(s):
+  syncbox          wss://127.0.0.1:55433
+  type yes/allow (or no/deny) ->   [PASS] wss sync succeeds against the local server
+  [PASS] sync with unknown id refused
+  [PASS] server stops
+  [PASS] second stop is idempotent
+  [PASS] stopped server refuses connections
+
+== ollama tool-call normalisation ==
+  [PASS] native tool calls surfaced
+  [PASS] dict arguments preserved
+  [PASS] json string arguments parsed
+  [PASS] malformed arguments preserved, not dropped
+  [PASS] empty tool call list
+  [PASS] agent can read ollama tool calls
+
+== external ai gating ==
+
+[PERMISSION] Sir, manual approval required for 'external_ai'. Jarvis requests permission: external_ai
+  type yes/allow (or no/deny) ->   [PASS] external provider refused when denied
+  [PASS] denial leaves no standing grant
+
+[PERMISSION] Sir, manual approval required for 'external_ai'. Jarvis requests permission: external_ai
+  type yes/allow (or no/deny) ->   [PASS] external provider registers when approved
+  [PASS] grant is single-use
+  [PASS] local ollama endpoint still enforced
+  [PASS] ollama itself still reachable-or-clean
+
+== goal planner ==
+  [PASS] heuristic fallback decomposes offline
+  [PASS] step ids are unique and non-empty
+  [PASS] heuristic plan validates
+  [PASS] render shows the plan and every step id
+  [PASS] keyword hazard found first
+  [PASS] llm may add a category
+  [PASS] llm cannot strip a keyword hit
+  [PASS] clean objective has no hazard
+  [PASS] llm cannot invent a category
+  [PASS] heuristic steps carry keyword hazards
+  [PASS] dependency cycle refused
+  [PASS] unknown dependency refused
+  [PASS] self dependency refused
+  [PASS] empty plan refused
+  [PASS] duplicate ids refused
+  [PASS] invalid plan refuses to execute
+  [PASS] missing runner refused
+  [PASS] execute runs every step
+  [PASS] outputs collected per step
+  [PASS] failed step blocks its dependents
+  [PASS] blocked step carries its blocker
+  [PASS] runner exception fails a single step
+  [PASS] step budget skips the rest
+  [PASS] runner-appended step joins the run
+
+[PERMISSION] Sir, manual approval required for 'file_delete'. Plan step is hazardous (file_delete).
+  goal : wipe the stale backups
+  step : delete the stale backup files
+  type yes/allow (or no/deny) ->   [PASS] hazard step waits for the operator
+  [PASS] denied step never reaches the runner
+  [PASS] denied step renders as such
+
+[PERMISSION] Sir, manual approval required for 'file_delete'. Plan step is hazardous (file_delete).
+  goal : retire the stale backups
+  step : remove the stale backup files
+  type yes/allow (or no/deny) ->   [PASS] approved hazard step executes
+  [PASS] execute writes plan state
+  [PASS] plan state round-trips
+  [PASS] corrupt plan state reads as None
+  [PASS] run() decomposes and executes
+  [PASS] history retains recent runs
+  [PASS] kernel planner falls back to heuristic offline
+  [PASS] kernel planner wired and sandboxed
+
+== memory index ==
+  [PASS] memory index booted in the sandbox
+  [PASS] index mirrors live memory
+  [PASS] sync is idempotent
+  [PASS] remember_fact mirrors into the index
+  [PASS] content-addressed row is searchable
+  [PASS] context block is non-empty
+  [PASS] kinds include fact
+  [PASS] content_id is deterministic
+  [PASS] re-remember is content-deduped
+  [PASS] sync stays deduped after remember_fact
+  [PASS] status reports rows and embedder
+  [PASS] empty text is not indexed
+  [PASS] empty read
+  [PASS] standalone index inserts
+  [PASS] standalone index dedups
+  [PASS] standalone index survives reopen
+
+== overseer components & state integrity ==
+  [PASS] healthy component reports nothing
+  [PASS] unhealthy component fires once
+  [PASS] component restart attempt 1 recovers
+  [PASS] component restart attempt 2 recovers
+  [PASS] component restart attempt 3 recovers
+  [PASS] component restart budget counted
+  [PASS] budget exhaustion leaves restarts untouched
+  [PASS] budget exhaustion escalates to the operator
+  [PASS] escalated component goes quiet
+  [PASS] recovery resets the episode
+  [PASS] relapse starts a fresh episode
+  [PASS] absent daemon state is not a fault
+  [PASS] corrupt daemon state reported
+  [PASS] dead background daemon reported
+  [PASS] live background daemon accepted
+  [PASS] non-background mode skips the pid check
+  [PASS] daemon fault surfaces through scan
+  [PASS] clean state passes integrity
+  [PASS] corrupt control file reported
+  [PASS] missing control file is fine
+  [PASS] non-object heartbeat reported
+  [PASS] corrupt config reported
+  [PASS] state restored after integrity probes
+  [PASS] corrupt heartbeat suppresses no_heartbeat
+  [PASS] corrupt heartbeat still faults as state_corrupt
+
+== business agent ==
+  [PASS] business agent attached to kernel
+  [PASS] content channel set
+  [PASS] pipeline stages set
+  [PASS] crm stages set
+  [PASS] unknown channel refused
+  [PASS] draft created
+  [PASS] draft body filled
+  [PASS] email draft honours audience
+  [PASS] review of unknown id refused
+  [PASS] unknown review verdict refused
+  [PASS] approve not allowed on draft
+  [PASS] blog row sits in draft stage
+  [PASS] rejected review recorded
+  [PASS] approved review recorded
+
+[PERMISSION] Sir, manual approval required for 'business_publish'. publish content: content_publish
+  type yes/allow (or no/deny) ->   [PASS] publish without approval denied
+  [PASS] denied publish does not flip stage
+
+[PERMISSION] Sir, manual approval required for 'business_publish'. publish content: content_publish
+  type yes/allow (or no/deny) ->   [PASS] publish with approval succeeds
+  [PASS] publish recorded in business ledger
+  [PASS] content_status resolves published row
+  [PASS] content_list filters by channel
+  [PASS] content_list filters by stage
+  [PASS] empty lead name refused
+  [PASS] lead added new
+  [PASS] unknown lead touch refused
+  [PASS] lead touch appended
+  [PASS] invalid lead stage refused
+  [PASS] lead stage move applied
+  [PASS] non-numeric score refused
+  [PASS] lead score clamped low
+  [PASS] lead score clamped high
+  [PASS] lead score applied
+  [PASS] leads filter by stage
+  [PASS] leads filter by min_score
+  [PASS] leads summary per-stage counts
+  [PASS] funnel report mentions win rate
+  [PASS] business publish degrades to allowed without a gate
+
+== trading bridge ==
+  [PASS] trading bridge attached to kernel
+  [PASS] config seeds monk profile
+  [PASS] dry_run flag honoured
+  [PASS] asset resolves from snapshot
+  [PASS] unknown asset refused
+  [PASS] asset lookup succeeds
+  [PASS] market snapshot deterministic
+  [PASS] analyze returns signal fields
+  [PASS] analyze rsi inbound
+  [PASS] analyze unknown refused
+  [PASS] sma static method
+  [PASS] rsi static method returns bounded value
+  [PASS] volatility static method finite
+  [PASS] compliance refuses unknown symbol
+  [PASS] compliance refuses bad side
+  [PASS] compliance refuses non-numeric qty
+  [PASS] compliance refuses zero qty
+  [PASS] crypto disallowed under monk preset
+  [PASS] oversized notional refused by cap
+  [PASS] small gold order compliant
+  [PASS] execute unknown symbol errors
+  [PASS] execute bad side refused
+  [PASS] dry-run order written
+
+[PERMISSION] Sir, manual approval required for 'trading_exec'. execute simulated market order: market_order
+  type yes/allow (or no/deny) ->   [PASS] live execution without approval denied
+
+[PERMISSION] Sir, manual approval required for 'trading_exec'. execute simulated market order: market_order
+  type yes/allow (or no/deny) ->   [PASS] live execution with approval approved
+  [PASS] approved order in trading ledger
+  [PASS] pnl tracks approved position
+  [PASS] gate-less bridge refuses live execution
+  [PASS] whale radar flags threshold events
+  [PASS] whale radar dedupes on rescan
+  [PASS] alerts surface open whales
+  [PASS] resolve unknown alert refused
+  [PASS] resolve bad decision refused
+  [PASS] resolve alert records decision
+  [PASS] status line shows profile and mode
+Sir, Usage: trading execute <symbol> <buy|sell> <qty> [--live]
+  [PASS] execute without qty is safe usage (len-3 regression)
+Sir, Usage: trading execute <symbol> <buy|sell> <qty> [--live] (qty must be a number, Sir)
+  [PASS] execute with non-numeric qty is safe usage (float regression)
+Sir, dry_run: GLD buy 10.0 @ 210.0
+  [PASS] interface dry-run execute works
+
+[PERMISSION] Sir, manual approval required for 'trading_exec'. execute simulated market order: market_order
+  type yes/allow (or no/deny) -> Sir, approved_simulated: GLD buy 10.0 @ 210.0
+  [PASS] interface --live execute accepted (len-5 regression)
+trading: profile=monk (Monk - capital preservation, index/gold/stablecoin only) | cap=±$5,000 | mode=DRY-RUN | market BTC=64,000, ETH=3,200, GLD=210, SOL=150, SPX=5,400 | open_alerts=2 | orders=2
+  [PASS] interface trading status works
+business: content=4 (draft=1 published=2) leads=2 funnel={'new': 1, 'contacted': 0, 'qualified': 1, 'proposal': 0, 'won': 0, 'lost': 0}
+funnel: current stage counts across the funnel
+  new       1
+  contacted 0
+  qualified 1
+  proposal  0
+  won       0
+  lost      0
+  won=0 lost=0 win_rate=0.0%
+  [PASS] interface business status works
+
+== rich terminal dashboard ==
+  [PASS] dashboard renders Jarvis OS | section
+  [PASS] dashboard renders llm section
+  [PASS] dashboard renders memory section
+  [PASS] dashboard renders index section
+  [PASS] dashboard renders gate section
+  [PASS] dashboard renders business section
+  [PASS] dashboard renders trading section
+  [PASS] dashboard renders heartbeat section
+  [PASS] dashboard renders overseer section
+  [PASS] dashboard renders daemon section
+  [PASS] dashboard renders voice section
+  [PASS] dashboard shows funnel report
+  [PASS] dashboard rich render falls back or panels
+  [PASS] rich dashboard render carries title
+  [PASS] fake kernel dashboard still renders agents
+
+== voice mode ==
+  [PASS] voice interface attached and disabled by feature flag
+  [PASS] voice availability reports all backends
+  [PASS] voice status reports OFF
+  [PASS] voice install hint mentions packages
+  [PASS] voice said_count starts at 0
+[voice] Sir, Hello, Sir.
+  [PASS] say when disabled returns False and prints prefix
+  [PASS] honorific prefix applied by language layer
+  [PASS] kernel set_voice status is safe
+  [PASS] kernel set_voice off keeps interface disabled
+[voice] Sir, Approve publish? Say 'approve' or 'deny'.
+  [PASS] capture_answer returns approve verdict
+[voice] Sir, Approve publish? Say 'approve' or 'deny'.
+  [PASS] capture_answer returns deny verdict
+[content:published] 0464ddce blog | Selftest Notes
+[content:draft    ] 0899282f email | Quarterly Update
+[content:rejected ] 8fbc5f81 social | Thread Notes
+[content:published] 44d77291 blog | Headless run
+  [PASS] voice command strips wake word and dispatches
+  [PASS] bare wake word is a no-op
+  [PASS] wake regex matches with comma
+  [PASS] voice remains disabled after off
+
+== mandatory approval gates ==
+  [PASS] business_publish in mandatory approval set
+  [PASS] trading_exec in mandatory approval set
+  [PASS] business gate requires approval
+  [PASS] trading gate requires approval
+  [PASS] mandatory category business_publish cannot be auto-allowed
+  [PASS] mandatory category trading_exec cannot be auto-allowed
+
+== memory durability across restart ==
+  [PASS] memories survived close/reopen
+  [PASS] lessons survived close/reopen
+  [PASS] integrity holds after reopen
+  [PASS] boot count increments
+  [PASS] overseer isolation cleared
+  [PASS] gate armed after clear
+  [PASS] control file removed
+  [FAIL] live state untouched by selftest  -- data/audit_ledger.jsonl, data/lessons.jsonl
+  PASSED: 536    FAILED: 1
+  failing: live state untouched by selftest
+==============================================================
